@@ -23,7 +23,7 @@ const sony=section('索尼中国有限公司上海分公司 HRG 部门实习');
 const basic=section('上海理工大学本科阶段');
 const dataDir=await fs.mkdtemp(path.join(os.tmpdir(),'workbench-interaction-'));
 process.env.WORKBENCH_DATA_DIR=dataDir;
-const {updateWiki,createWikiExperience,guideQuestions,conversationFor,state,documentFor,generate,compose}=await import('../workbench.mjs');
+const {updateWiki,createWikiExperience,guideQuestions,conversationFor,saveProfile,state,documentFor,generate,compose}=await import('../workbench.mjs');
 const {call}=await import('../llm.mjs');
 const report={steps:[],dataDir};
 try{
@@ -39,7 +39,8 @@ try{
   const active=index.nodes.filter(n=>n.status==='active');
   const validAnchors=(await Promise.all(active.map(n=>documentFor(n,index.revision)))).every((text,i)=>text.includes(`<a id="${active[i].id}"></a>`));
   report.steps.push({stage:'second_experience',revision:c.revision,new_experience:c.experience_id!==a.experience_id,raw_batches:rawFiles.length,counts,validAnchors,questions:c.questions?.length||0,guide_questions:guidance.questions.length,conversation_turns:(await conversationFor(a.experience_id)).length});
-  report.steps.push({stage:'basic_information',backend_action:'no dedicated profile or education input contract',source_length:basic.length});
+  const savedProfile=await saveProfile({markdown:basic});
+  report.steps.push({stage:'basic_information',profile_revision:savedProfile.revision,source_length:basic.length});
   const jd='AI 产品实习生：协助梳理用户需求，输出产品交付文档；熟练使用 ChatGPT、DeepSeek 等大模型工具提升需求梳理和方案撰写效率；了解 Coze 平台；具有逻辑思维和沟通能力，能够推进需求落地。';
   const run=await generate({jd,mode:'index_fallback'},call);
   report.steps.push({stage:'outline',run_id:run.id,requirements:run.query_plan.requirements.length,index_hits:run.discovery.map(x=>x.index_candidates.length),fallback_reads:run.discovery.map(x=>x.fulltext_fallback_candidates.length),selection:run.selection.items.map(x=>({kind:index.nodes.find(n=>n.id===x.node_id)?.kind,section:x.section,use:x.use})),sections:run.outline.sections.map(x=>x.name),model_calls:run.metrics.model_usage.length});

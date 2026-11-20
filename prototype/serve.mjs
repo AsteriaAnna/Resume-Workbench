@@ -3,7 +3,8 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {call,configured,model} from './llm.mjs';
-import {state,documentFor,updateWiki,createWikiExperience,guideQuestions,conversationFor,editWiki,generate,reviseOutline,compose} from './workbench.mjs';
+import {resumes,saveResumes,syncSettings,setSyncToken,pushData,pullData} from './storage.mjs';
+import {state,profile,saveProfile,documentFor,updateWiki,createWikiExperience,guideQuestions,conversationFor,editWiki,generate,reviseOutline,compose} from './workbench.mjs';
 const root=path.dirname(fileURLToPath(import.meta.url));
 const files={'/':'index.html','/app.js':'app.js','/style.css':'style.css'};
 const port=Number(process.env.WORKBENCH_PORT||4321);
@@ -16,7 +17,16 @@ const prompts={
 };
 async function body(req){let raw='';for await(const chunk of req){raw+=chunk;if(raw.length>1000000)throw Error('输入过长')}return JSON.parse(raw)}
 http.createServer(async(req,res)=>{try{const url=new URL(req.url,'http://localhost');if(req.method==='GET'&&url.pathname==='/api/status')return send(res,200,{configured:configured(),model});
+if(req.method==='POST'&&req.headers.origin&&!['http://127.0.0.1:'+port,'http://localhost:'+port].includes(req.headers.origin))return send(res,403,{error:'仅允许本机页面修改资料'});
+if(req.method==='GET'&&url.pathname==='/api/resumes')return send(res,200,{items:await resumes()});
+if(req.method==='POST'&&url.pathname==='/api/resumes')return send(res,200,{items:await saveResumes((await body(req)).items)});
+if(req.method==='GET'&&url.pathname==='/api/sync/settings')return send(res,200,await syncSettings());
+if(req.method==='POST'&&url.pathname==='/api/sync/settings')return send(res,200,await setSyncToken((await body(req)).token));
+if(req.method==='POST'&&url.pathname==='/api/sync/push')return send(res,200,await pushData());
+if(req.method==='POST'&&url.pathname==='/api/sync/pull')return send(res,200,await pullData());
 if(req.method==='GET'&&url.pathname==='/api/wiki'){const index=await state();return send(res,200,{index,documents:await Promise.all(index.nodes.map(async n=>({id:n.id,markdown:await documentFor(n,index.revision)})))})}
+if(req.method==='GET'&&url.pathname==='/api/profile')return send(res,200,await profile());
+if(req.method==='POST'&&url.pathname==='/api/profile')return send(res,200,await saveProfile(await body(req)));
 if(req.method==='GET'&&url.pathname==='/api/wiki/conversation')return send(res,200,{messages:await conversationFor(url.searchParams.get('experience_id'))});
 if(req.method==='POST'&&url.pathname==='/api/wiki/input')return send(res,200,await updateWiki(await body(req),call));
 if(req.method==='POST'&&url.pathname==='/api/wiki/create')return send(res,200,await createWikiExperience(await body(req),call));
