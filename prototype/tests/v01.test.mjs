@@ -9,7 +9,6 @@ let turn=0;let currentStory,currentFragment;
 const mock=async(task,input)=>{
  if(task==='check_extension')return {accept:!input.message.includes('rap'),reason:'内容与所选经历无关'};
  if(task==='guide_questions')return {questions:[]};
- if(task==='resolve_experience')return {action:'update',experience_id:input.catalog[0].id};
  if(task==='wiki_update'){
    turn++;const id=input.existing.id;
    if(turn===1)return {title:'示例实习',summary:'处理文档和流程',markdown:'## 背景\n在示例公司参与文档工作。',stories:[{title:'文档制作',summary:'独立整理文档',markdown:'我独立整理文档。'}],fragments:[{title:'流程问题',summary:'发现流程问题',markdown:'发现交接缺少记录。'}],topics:[{title:'文档能力',summary:'整理文档',node_ids:[]}],quotes:['在示例公司']};

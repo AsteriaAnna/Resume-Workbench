@@ -3,10 +3,10 @@ import os from 'node:os';
 import path from 'node:path';
 const dir=await fs.mkdtemp(path.join(os.tmpdir(),'resume-live-v01-'));
 process.env.WORKBENCH_DATA_DIR=dir;
-const {updateWiki,generate,compose,state}=await import('../workbench.mjs');
+const {createWikiExperience,generate,compose,state}=await import('../workbench.mjs');
 const {call}=await import('../llm.mjs');
 try{
- const update=await updateWiki({message:'我在示例公司担任产品实习生，负责整理每周产品反馈。原来的反馈散在聊天记录里，我用飞书表格按问题类别记录并每周发给导师。我们没有统计效率变化。'},call);
+ const update=await createWikiExperience({message:'我在示例公司担任产品实习生，负责整理每周产品反馈。原来的反馈散在聊天记录里，我用飞书表格按问题类别记录并每周发给导师。我们没有统计效率变化。'},call);
  console.log(JSON.stringify({stage:'wiki',revision:update.revision,nodes:(await state()).nodes.map(n=>({kind:n.kind,status:n.status}))}));
  const run=await generate({jd:'招聘产品实习生：能整理用户反馈、使用办公工具，并清楚表达个人贡献。',mode:'index_fallback'},call);
  console.log(JSON.stringify({stage:'outline',requirements:run.query_plan.requirements.length,sections:run.outline.sections.length,read_nodes:run.metrics.read_nodes}));
