@@ -1,13 +1,14 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import {gzipSync,gunzipSync} from 'node:zlib';
+import {randomUUID} from 'node:crypto';
 
 const root=path.resolve(process.env.WORKBENCH_DATA_DIR||path.join(import.meta.dirname,'local-data'));
 const configFile=path.join(import.meta.dirname,'.local-github.json');
 const repo='AsteriaAnna/esume-Workbench-data';
 const remoteFile='workbench-data.json.gz';
 const readJson=async(file,fallback)=>{try{return JSON.parse(await fs.readFile(file,'utf8'))}catch(e){if(e.code==='ENOENT')return fallback;throw e}};
-const writeJson=async(file,value)=>{await fs.mkdir(path.dirname(file),{recursive:true});const temp=`${file}.${process.pid}.tmp`;await fs.writeFile(temp,JSON.stringify(value,null,2),'utf8');await fs.rename(temp,file)};
+const writeJson=async(file,value)=>{await fs.mkdir(path.dirname(file),{recursive:true});const temp=`${file}.${randomUUID()}.tmp`;await fs.writeFile(temp,JSON.stringify(value,null,2),'utf8');await fs.rename(temp,file)};
 
 export async function resumes(){return readJson(path.join(root,'resumes.json'),[])}
 export async function saveResumes(items){if(!Array.isArray(items)||items.length>500||items.some(x=>!x||typeof x.id!=='number'||typeof x.name!=='string'||typeof x.html!=='string'||x.html.length>200000))throw Error('简历资料格式不正确');await writeJson(path.join(root,'resumes.json'),items);return items}
