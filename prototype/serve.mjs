@@ -5,15 +5,17 @@ import {fileURLToPath} from 'node:url';
 import {configured,connectionInfo,saveConnection,taskNames,promptInfo,savePrompt} from './llm.mjs';
 import {flow,traced,traces,traceFor,runs,runFor,workflowConfig,saveWorkflowConfig} from './debug.mjs';
 import {resumes,saveResumes,syncSettings,setSyncToken,pushData,pullData} from './storage.mjs';
-import {state,profile,saveProfile,documentFor,updateWiki,createWikiExperience,guideQuestions,conversationFor,editWiki,setExperienceType,generate,reviseOutline,compose} from './workbench.mjs';
+import {state,profile,saveProfile,documentFor,wikiIndex,updateWiki,createWikiExperience,guideQuestions,conversationFor,editWiki,setExperienceType,generate,reviseOutline,compose} from './workbench.mjs';
 const root=path.dirname(fileURLToPath(import.meta.url));
-const files={'/':'index.html','/app.js':'app.js','/style.css':'style.css','/debug':'debug.html','/debug.js':'debug.js','/debug.css':'debug.css'};
+const files={'/':'index.html','/app.js':'app.js','/style.css':'style.css','/debug':'debug.html','/debug.js':'debug.js','/debug.css':'debug.css','/index-debug.js':'index-debug.js'};
 const port=Number(process.env.WORKBENCH_PORT||4321);
 const send=(res,status,obj)=>{res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'});res.end(JSON.stringify(obj))};
 async function body(req){let raw='';for await(const chunk of req){raw+=chunk;if(raw.length>1000000)throw Error('输入过长')}return JSON.parse(raw)}
 http.createServer(async(req,res)=>{try{const url=new URL(req.url,'http://localhost');if(req.method==='GET'&&url.pathname==='/api/status')return send(res,200,connectionInfo());
 if(req.method==='POST'&&req.headers.origin&&!['http://127.0.0.1:'+port,'http://localhost:'+port].includes(req.headers.origin))return send(res,403,{error:'仅允许本机页面修改资料'});
 if(req.method==='GET'&&url.pathname==='/api/debug/flow')return send(res,200,flow());
+if(req.method==='GET'&&url.pathname==='/api/debug/wiki-index')return send(res,200,await wikiIndex(url.searchParams.get('term')||''));
+if(req.method==='GET'&&url.pathname==='/api/debug/wiki-node'){const id=url.searchParams.get('id');if(id==='profile_local')return send(res,200,{id,markdown:(await profile()).markdown});const index=await state(),node=index.nodes.find(n=>n.id===id);if(!node)return send(res,404,{error:'节点不存在'});return send(res,200,{id,markdown:await documentFor(node,index.revision)})}
 if(req.method==='GET'&&url.pathname==='/api/debug/workflow')return send(res,200,await workflowConfig());
 if(req.method==='POST'&&url.pathname==='/api/debug/workflow')return send(res,200,await saveWorkflowConfig(await body(req)));
 if(req.method==='GET'&&url.pathname==='/api/debug/connection')return send(res,200,connectionInfo());

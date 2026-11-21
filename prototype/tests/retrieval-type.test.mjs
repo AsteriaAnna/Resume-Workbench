@@ -5,7 +5,7 @@ import path from 'node:path';
 
 const folder=await fs.mkdtemp(path.join(os.tmpdir(),'workbench-retrieval-'));
 process.env.WORKBENCH_DATA_DIR=folder;
-const {createWikiExperience,generate,setExperienceType,state}=await import('../workbench.mjs');
+const {createWikiExperience,generate,setExperienceType,state,wikiIndex}=await import('../workbench.mjs');
 const mock=async(task,input)=>{
   if(task==='wiki_update'){
     if(input.message.includes('校园'))return {title:'校园活动',experience_type:'campus',summary:'活动执行',markdown:'我负责校园活动的报名和签到。',stories:[{title:'报名签到流程',summary:'用表格记录报名名单',markdown:'我用表格记录报名和签到。'}],fragments:[],topics:[],quotes:['校园活动']};
@@ -26,6 +26,10 @@ try{
   const before=await state();
   assert.equal(before.nodes.find(n=>n.id===campus.experience_id).experience_type,'campus');
   const story=before.nodes.find(n=>n.kind==='story');
+  const indexView=await wikiIndex('报名');
+  assert.ok(indexView.matches.includes(campus.experience_id));
+  assert.ok(indexView.experience_search.find(x=>x.experience_id===campus.experience_id).matched_parts.some(x=>x.node_id===story.id));
+  assert.ok(indexView.relations.some(x=>x.type==='belongs_to'&&x.from_id===story.id&&x.to_id===campus.experience_id));
   const run=await generate({jd:'负责报名流程',mode:'index_fallback'},mock);
   assert.deepEqual(run.discovery[0].index_candidates,[campus.experience_id]);
   assert.ok(run.discovery[0].fulltext_fallback_candidates.every(id=>id.startsWith('exp_')));
