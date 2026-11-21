@@ -19,6 +19,8 @@ const mock=async(task,input)=>{
   throw Error(`Unexpected task ${task}`);
 };
 try{
+  const ruleEvents=[];
+  mock.record=(task,input,output)=>ruleEvents.push({task,input,output});
   const campus=await createWikiExperience({message:'我在校园活动负责报名签到。'},mock);
   await createWikiExperience({message:'我在公司整理员工档案。'},mock);
   const before=await state();
@@ -31,6 +33,10 @@ try{
   assert.equal(run.selection.items[0].section,'项目经历');
   assert.deepEqual(run.selection.items[0].story_ids,[story.id]);
   assert.ok(run.selection.items[0].evidence_ids.includes(story.id));
+  assert.ok(ruleEvents.some(x=>x.task==='wiki_commit'));
+  assert.ok(ruleEvents.some(x=>x.task==='experience_search'&&x.output.index_candidates.includes(campus.experience_id)));
+  assert.ok(ruleEvents.some(x=>x.task==='selection_guard'));
+  assert.ok(ruleEvents.some(x=>x.task==='outline_guard'));
   assert.equal(run.outline.sections[0].name,'项目经历');
   const changed=await setExperienceType({experience_id:campus.experience_id,experience_type:'project'});
   assert.equal(changed.experience_type,'project');

@@ -1,4 +1,6 @@
 prototype/.local-ai.json
+prototype/.local-debug.json
+prototype/.local-workflow.json
 prototype/.local-github.json
 prototype/local-data/
 prototype/*.jpg
