@@ -4,7 +4,7 @@ import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {call,configured,model} from './llm.mjs';
 import {resumes,saveResumes,syncSettings,setSyncToken,pushData,pullData} from './storage.mjs';
-import {state,profile,saveProfile,documentFor,updateWiki,createWikiExperience,guideQuestions,conversationFor,editWiki,generate,reviseOutline,compose} from './workbench.mjs';
+import {state,profile,saveProfile,documentFor,updateWiki,createWikiExperience,guideQuestions,conversationFor,editWiki,setExperienceType,generate,reviseOutline,compose} from './workbench.mjs';
 const root=path.dirname(fileURLToPath(import.meta.url));
 const files={'/':'index.html','/app.js':'app.js','/style.css':'style.css'};
 const port=Number(process.env.WORKBENCH_PORT||4321);
@@ -32,6 +32,7 @@ if(req.method==='POST'&&url.pathname==='/api/wiki/input')return send(res,200,awa
 if(req.method==='POST'&&url.pathname==='/api/wiki/create')return send(res,200,await createWikiExperience(await body(req),call));
 if(req.method==='POST'&&url.pathname==='/api/wiki/questions')return send(res,200,await guideQuestions(await body(req),call));
 if(req.method==='POST'&&url.pathname==='/api/wiki/edit')return send(res,200,await editWiki(await body(req)));
+if(req.method==='POST'&&url.pathname==='/api/wiki/type')return send(res,200,await setExperienceType(await body(req)));
 if(req.method==='POST'&&url.pathname==='/api/resume/outline')return send(res,200,await generate(await body(req),call));
 if(req.method==='POST'&&url.pathname==='/api/resume/revise')return send(res,200,await reviseOutline(await body(req),call));
 if(req.method==='POST'&&url.pathname==='/api/resume/compose')return send(res,200,await compose(await body(req),call));
