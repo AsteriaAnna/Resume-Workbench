@@ -1,3 +1,4 @@
+import {createStudio} from './studio-ui.js';
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => [...document.querySelectorAll(s)];
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -13,7 +14,6 @@ const S = {
   activeDoc: 1, docTabs: [1], wikiRevision: 0, relations: [], aiOpen: true, layout: '星图',
   resumes: [], opened: [], activeResume: null, folder: '全部简历', folders: ['我的简历', '实习申请'],
   side: 'gen', formatTab: '排版设置', graphMode: 'atlas', graphRotate: false, graphLabels: true, wikiChat: {}, wikiChatLoaded: new Set(),
-  v2: { cards: [], experiences: [], scan: null, sel: new Map(), strategy: { jd_focus: '', hook_level: 'L2', body_pattern: 'CAR' }, run: null, comments: [], active: null, busy: false, runId: null },
 };
 const selectedExperience = () => { const n = S.nodes[S.activeDoc]; return n?.kind === 'experience' ? n.id : ['story', 'fragment'].includes(n?.kind) ? n.experience_id : null; };
 const current = () => S.resumes.find((r) => r.id === S.activeResume);
@@ -30,22 +30,9 @@ function bind() {
   document.addEventListener('click', onClick);
   document.addEventListener('input', (e) => {
     if (e.target.id === 'doc-editor') { const n = S.nodes[S.activeDoc]; if (n) n.text = e.target.value; }
-    if (e.target.id === 'jd-input') S._jd = e.target.value;
-    if (e.target.dataset.style) {
-      const r = current(); if (r) { r.styles = { ...(r.styles || {}), [e.target.dataset.style]: e.target.dataset.style === 'lineHeight' ? e.target.value : e.target.value + 'px' }; const p = $('#paper'); if (p) Object.assign(p.style, r.styles); }
-    }
+    studio.input(e);
   });
-  document.addEventListener('change', (e) => {
-    if (e.target.id === 'experience-type') return setType(e.target.value);
-    if (e.target.matches('[data-pick]')) {
-      const map = S.v2.sel.get(e.target.dataset.exp) || new Map();
-      map.set(e.target.dataset.card, e.target.checked);
-      S.v2.sel.set(e.target.dataset.exp, map);
-      const box = $('#scan-box'); if (box) { box.innerHTML = scanList(); }
-      const expHead = e.target.closest('.exp-block')?.querySelector('.exp-head span'); if (expHead) { const r = S.v2.scan.experience_rankings.find((x) => x.exp_id === e.target.dataset.exp); if (r) expHead.textContent = `${experienceTypeNames[S.v2.experiences.find((x) => x.exp_id === r.exp_id)?.category] || ''} · #${r.priority_rank} ${r.decision || ''} · 已选 ${[...map.values()].filter(Boolean).length}/${S.v2.cards.filter((c) => c.exp_id === r.exp_id).length}`; }
-    }
-    if (['hook-level', 'body-pattern'].includes(e.target.id)) { S.v2.strategy[e.target.id === 'hook-level' ? 'hook_level' : 'body_pattern'] = e.target.value; }
-  });
+  document.addEventListener('change', e=>{if(e.target.id==='node-jump'){selectDoc(e.target.value);return;}if(e.target.id==='experience-type')setType(e.target.value);else studio.input(e);});
 }
 
 /* ---------------- 路由/渲染 ---------------- */
@@ -84,7 +71,7 @@ async function loadWiki(openId) {
     const idx = (id) => S.nodes.findIndex((n) => n.id === id);
     S.docTabs = [1, ...openIds.map(idx).filter((i) => i > 1)];
     if (openId && idx(openId) > 1) { S.activeDoc = idx(openId); if (!S.docTabs.includes(S.activeDoc)) S.docTabs.push(S.activeDoc); }
-    else if (activeId && idx(activeId) > 1) S.activeDoc = idx(activeId);
+    else if (activeId && idx(activeId) > 1) S.activeDoc = idx(activeId);else S.activeDoc=1;
     render();
   } catch (e) { toast('经历库读取失败：' + e.message); }
 }
@@ -94,7 +81,7 @@ async function loadProfile() {
 function renderWiki() {
   $('#app').innerHTML = `<div class="wiki">
     <section class="panel graph-panel"><div class="panel-head"><strong>知识图谱</strong><span>${S.wikiRevision ? `第 ${S.wikiRevision} 版 · ` : '示例 · '}${S.nodes.length} 个节点</span></div>
-      <div class="graph" id="graph"><canvas id="graph-canvas"></canvas></div>
+      <select id="node-jump" aria-label="查找节点"><option value="">查找节点…</option>${S.nodes.map((n,i)=>`<option value="${i}">${esc(n.title)}</option>`).join('')}</select><div class="graph" id="graph"><canvas id="graph-canvas"></canvas></div>
       <div class="legend"><span style="color:#d9b877">● 我的经历</span>　<span style="color:#6d91bd">● 经历</span>　<span style="color:#8be9b0">● 卡片</span>　<span style="color:#8b98a9">● 主题</span></div>
       ${graphFooterHtml()}
     </section>
@@ -109,7 +96,7 @@ function renderWiki() {
 }
 function docPanelHtml() {
   const n = S.nodes[S.activeDoc];
-  return `<div class="doc-tabs">${S.docTabs.map((i) => `<div class="doc-tab ${i === S.activeDoc ? 'active' : ''}"><button data-node="${i}">${esc(S.nodes[i]?.title || '')}</button><button data-close-doc="${i}">×</button></div>`).join('')}<button data-action="new-node">＋</button><button data-action="save-doc">保存</button></div>
+  return `<div class="doc-tabs">${S.docTabs.map((i) => `<div class="doc-tab ${i === S.activeDoc ? 'active' : ''}"><button data-node="${i}">${esc(S.nodes[i]?.title || '')}</button><button data-close-doc="${i}">×</button></div>`).join('')}<button data-action="new-node">＋</button><button data-action="save-doc">保存</button><button data-action="archive-node">归档</button><button data-action="restore-node">恢复</button></div>
     ${!n ? '<div class="empty">点击图谱节点打开，或新建经历。</div>' : `<div class="doc-title">${esc(n.title)}</div>${n.kind === 'experience' ? `<div class="doc-sub">经历类型 · <select id="experience-type">${Object.entries(experienceTypeNames).map(([k, v]) => `<option value="${k}" ${n.experience_type === k ? 'selected' : ''}>${v}</option>`).join('')}</select> · Markdown 可编辑</div>` : '<div class="doc-sub">Markdown 文档 · 可编辑</div>'}<textarea class="doc-editor" id="doc-editor">${esc(n.text)}</textarea><div class="foot">编辑后点“保存”；索引与正文同步更新</div>`}`;
 }
 function refreshWikiDoc() { const el = $('#doc-panel'); if (el) el.innerHTML = docPanelHtml(); }
@@ -176,6 +163,7 @@ async function wikiSend() {
   addWikiChat('you', text);
   $('#wiki-input').value = '';
   try {
+    if(S.activeDoc===1){const n=S.nodes[1];n.text=(n.text.includes('在这里记录姓名')?'# 基础信息':n.text)+'\n\n'+text;await postJson('/api/profile',{markdown:n.text});addWikiChat('ai','已保存到基础信息。');refreshWikiDoc();return;}
     if (exp) {
       const r = await postJson('/api/wiki/input', { experience_id: exp, message: text });
       const qs = (r.questions || []).map((q) => `<li>${esc(q.question || q)}</li>`).join('');
@@ -187,7 +175,7 @@ async function wikiSend() {
       await loadWiki(r.experience_id);
       loadWikiChat(r.experience_id);
     }
-  } catch (e) { addWikiChat('ai', '失败：' + esc(e.message)); }
+  } catch (e) { if($('#wiki-input'))$('#wiki-input').value=text;addWikiChat('ai', '失败：' + esc(e.message)+'；输入已保留，可重试。'); }
 }
 async function wikiAsk() {
   const exp = selectedExperience(); if (!exp) return toast('先在图谱里选一段经历');
@@ -222,7 +210,7 @@ const seeded = (id, salt) => (hashStr(id + '#' + salt) % 1000) / 1000;
 function withHub(data) {
   const hub = { id: '__hub__', label: '我的经历', type: 'hub' };
   const exps = data.nodes.filter((n) => n.type === 'experience');
-  const links = [...(data.links || []), ...exps.map((n) => ({ source: '__hub__', target: n.id, kind: 'center' }))];
+  const links = [...(data.links || []), ...data.nodes.filter(n=>n.type==='experience'||n.type==='profile').map((n) => ({ source: '__hub__', target: n.id, kind: 'center' }))];
   return { ...data, nodes: [hub, ...data.nodes], links };
 }
 
@@ -230,17 +218,17 @@ async function drawGraph() {
   const canvas = $('#graph-canvas'); if (!canvas) return;
   stopGraph();
   let data;
-  try { data = await getJson('/api/v2/graph'); } catch { data = { nodes: [], links: [], stats: {} }; }
+  try { data = await getJson('/api/studio/graph'); } catch { data = { nodes: [], links: [], stats: {} }; }
   if (!data.nodes.length) data = { nodes: S.nodes.slice(2).map((n) => ({ id: n.id || n.title, label: n.title, type: n.kind === 'experience' ? 'experience' : 'card', grade: 'A' })), links: [], stats: {} };
   data = withHub(data);
   if (canvas.clientWidth < 80 || canvas.clientHeight < 80) { setTimeout(drawGraph, 60); return; }
   const ctx = canvas.getContext('2d'); const dpr = window.devicePixelRatio || 1;
   const fit = () => { canvas.width = canvas.clientWidth * dpr; canvas.height = canvas.clientHeight * dpr; };
   fit();
-  const onResize = () => fit();
+  const onResize = () => {fit();W=canvas.clientWidth;H=canvas.clientHeight;};
   window.addEventListener('resize', onResize);
 
-  const W = canvas.clientWidth || 600, H = canvas.clientHeight || 480;
+  let W = canvas.clientWidth || 600, H = canvas.clientHeight || 480;
   const mode = GRAPH_MODE();
   const radiusOf = (n) => n.type === 'hub' ? 15 : n.type === 'experience' ? 13 : n.type === 'card' ? (n.grade === 'S' ? 8 : n.grade === 'A' ? 6.5 : 5.5) : 3.2;
   const colorOf = (n) => n.type === 'hub' ? '#f6d79a' : n.type === 'experience' ? '#9ed0ff' : n.type === 'card' ? (n.grade === 'S' ? '#a6f3c7' : n.grade === 'A' ? '#ffd489' : '#ffa29b') : '#a9b6cc';
@@ -327,10 +315,8 @@ async function drawGraph() {
   canvas.onclick = (e) => {
     const n = pick(e.offsetX, e.offsetY); if (!n) return;
     if (n.type === 'hub') { toast('中心节点：我的经历。点击任意经历可打开。'); return; }
-    const exp = n.type === 'experience' ? n.id : (n.exp_id || findExp(n.id));
-    if (!exp) return;
-    const i = S.nodes.findIndex((x) => x.id === exp);
-    if (i >= 0) selectDoc(i);
+    if(n.id==='profile_local'){selectDoc(1);return;}
+    const i=S.nodes.findIndex(x=>x.id===n.id);if(i>=0)selectDoc(i);
   };
   canvas.onwheel = (e) => { e.preventDefault(); Graph.zoom = Math.min(3, Math.max(0.35, (Graph.zoom || 1) * (e.deltaY < 0 ? 1.12 : 0.9))); cam.k = Graph.zoom; };
   function findExp(id) { const l = links.find((x) => x.target === id || x.source === id); if (!l) return null; return map.get(l.source)?.type === 'experience' ? l.source : map.get(l.target)?.type === 'experience' ? l.target : null; }
@@ -422,143 +408,10 @@ async function drawGraph() {
 }
 
 
-/* ---------------- 简历列表 ---------------- */
-async function loadResumes() { try { const d = await getJson('/api/resumes'); S.resumes = d.items || d || []; } catch { S.resumes = []; } }
-function renderResumes() {
-  $('#app').innerHTML = `<div class="library"><div class="heading"><div><h1>我的简历</h1><p>每一次机会，都有一份合适的表达。</p></div><div class="actions"><button data-action="new">＋ 新建简历</button></div></div>
-    <div class="folders">${['全部简历', ...S.folders].map((x) => `<button data-folder="${esc(x)}" class="${S.folder === x ? 'active' : ''}">▱ ${esc(x)}</button>`).join('')}</div>
-    <div class="cards">${S.resumes.filter((r) => S.folder === '全部简历' || r.folder === S.folder).map((r) => `<article class="card" data-open="${esc(r.id)}"><div class="mini"><div class="mini-sheet"><b>${esc(r.name)}</b>${Array.from({ length: 15 }, (_, i) => `<div class="mini-line ${i % 5 === 0 ? 'heading-line' : i % 3 === 0 ? 'short' : ''}"></div>`).join('')}</div></div><div class="card-meta"><strong>${esc(r.name)}</strong><small>${esc(r.folder || '我的简历')} · 本机资料</small></div></article>`).join('') || '<div class="empty">还没有简历，点右上角新建。</div>'}</div></div>`;
-}
-function newResume() { const r = { id: 'r_' + Date.now().toString(36), name: '未命名简历', folder: '我的简历', html: '', styles: {} }; S.resumes.unshift(r); S.activeResume = r.id; if (!S.opened.includes(r.id)) S.opened.push(r.id); S.screen = 'editor'; S.side = 'gen'; render(); setTimeout(() => $('#jd-input')?.focus(), 60); }
-function openResume(id) { S.activeResume = id; if (!S.opened.includes(id)) S.opened.push(id); S.screen = 'editor'; S.side = 'gen'; render(); }
-async function saveResume(showToast = true) { const r = current(); if (!r) return; const paper = $('#paper'); if (paper) r.html = paper.innerHTML; try { await postJson('/api/resumes', { items: S.resumes }); if (showToast) toast('已保存到本机资料库'); } catch (e) { toast('保存失败：' + e.message); } }
-
-/* ---------------- 简历编辑器 ---------------- */
-function renderEditor() {
-  const r = current();
-  $('#app').innerHTML = `<div class="toolbar"><button data-action="save">保存</button><button data-action="copy">创建副本</button><button data-action="rename">重命名</button><button data-action="back">返回列表</button><div class="middle"><button data-action="side-gen" class="${S.side === 'gen' ? 'active' : ''}">✧ 生成</button><button data-action="side-format" class="${S.side === 'format' ? 'active' : ''}">简历美化</button><button data-action="side-ai" class="${S.side === 'ai' ? 'active' : ''}">评论${S.v2.comments.length ? ` (${S.v2.comments.length})` : ''}</button></div></div>
-    <div class="editor-space"><div class="paper-area"><article id="paper" class="paper" contenteditable="true" aria-label="简历正文">${r.html || '<div class="empty">在右侧输入 JD → 扫描 → 选卡 → 生成简历</div>'}</article><div id="bubble-layer" class="gxbubble-layer"></div></div>
-    <section class="panel side" id="gen-side">${S.side === 'gen' ? genPanel() : S.side === 'format' ? formatPanel() : aiPanel()}</section></div>`;
-  if (r.styles) Object.assign($('#paper').style, r.styles);
-  if (S.v2.comments.length) renderBubbles();
-}
-function genPanel() {
-  const st = S.v2.strategy; const scan = S.v2.scan;
-  return `<div class="gen-tabs"><strong>✧ 生成流程</strong><span>${S.v2.busy ? '处理中…' : ''}</span></div>
-    <div class="gen-body">
-      <label class="field">目标 JD<textarea id="jd-input" placeholder="粘贴目标岗位的完整 JD…">${esc(S._jd || '')}</textarea></label>
-      <div class="row"><button class="primary" data-action="scan">扫描并推荐</button><button data-action="gen" ${scan ? '' : 'disabled'}>生成简历</button></div>
-      ${st.jd_focus ? `<div class="jd-focus">JD 核心：${esc(st.jd_focus)}</div>` : ''}
-      <div class="grid2"><label class="field">Hook 层级<select id="hook-level"><option value="L1" ${st.hook_level === 'L1' ? 'selected' : ''}>L1 功能直白</option><option value="L2" ${st.hook_level === 'L2' ? 'selected' : ''}>L2 行业术语</option><option value="L3" ${st.hook_level === 'L3' ? 'selected' : ''}>L3 架构权衡</option></select></label><label class="field">正文骨架<select id="body-pattern"><option value="XYZ" ${st.body_pattern === 'XYZ' ? 'selected' : ''}>XYZ 成果</option><option value="CAR" ${st.body_pattern === 'CAR' ? 'selected' : ''}>CAR 痛点</option><option value="PAR" ${st.body_pattern === 'PAR' ? 'selected' : ''}>PAR 流程</option></select></label></div>
-      <div id="scan-box">${scan ? scanList() : '<p class="hint">扫描会读取全部经历与卡片，自动排序、选卡并给出缺口。</p>'}</div>
-    </div>`;
-}
-function scanList() {
-  const rows = [...(S.v2.scan.experience_rankings || [])].sort((a, b) => (a.priority_rank || 99) - (b.priority_rank || 99));
-  return rows.map((r) => {
-    const exp = S.v2.experiences.find((e) => e.exp_id === r.exp_id);
-    const cards = S.v2.cards.filter((c) => c.exp_id === r.exp_id).sort((a, b) => a.step_order - b.step_order);
-    const map = S.v2.sel.get(r.exp_id) || new Map();
-    const why = new Map((r.selected_cards || []).map((x) => [x.card_id, x.match_reason]));
-    const picked = cards.filter((c) => map.get(c.card_id)).length;
-    return `<div class="exp-block"><div class="exp-head"><b>${esc(exp?.title || r.exp_id)}</b><span class="tag">${esc(experienceTypeNames[exp?.category] || '')} · #${r.priority_rank} ${esc(r.decision || '')} · 已选 ${picked}/${cards.length}</span></div>
-      ${cards.map((c) => `<label class="pick"><input type="checkbox" data-pick data-exp="${esc(r.exp_id)}" data-card="${esc(c.card_id)}" ${map.get(c.card_id) ? 'checked' : ''}><span><b>${esc(c.toc_title)}</b> <i class="g g-${c.quality_grade}">${c.quality_grade}</i>${why.get(c.card_id) ? `<small class="why">推荐：${esc(why.get(c.card_id))}</small>` : ''}</span></label>`).join('')}
-      ${(r.gaps || []).length ? `<div class="gapnote">缺口：${esc(r.gaps.join('；'))}</div>` : ''}</div>`;
-  }).join('');
-}
-function formatPanel() {
-  return `<div class="gen-tabs"><strong>简历美化</strong><span></span></div><div class="side-body"><div class="switches">${['切换模板', '排版设置', '模块管理'].map((t) => `<button data-format="${t}" class="${S.formatTab === t ? 'active' : ''}">${esc(t)}</button>`).join('')}</div>
-    ${S.formatTab === '排版设置' ? `<label class="field">字号 <input data-style="fontSize" type="range" min="11" max="18" value="${parseFloat(current()?.styles?.fontSize) || 13}"></label><label class="field">行间距 <input data-style="lineHeight" type="range" min="1.2" max="2.4" step=".1" value="${parseFloat(current()?.styles?.lineHeight) || 1.7}"></label><label class="field">页面留白 <input data-style="padding" type="range" min="20" max="70" value="${parseFloat(current()?.styles?.padding) || 48}"></label>` : S.formatTab === '切换模板' ? '<button class="suggestion" data-theme="classic">经典 · 清晰单栏</button><button class="suggestion" data-theme="blue">蓝调 · 标题强调</button>' : '<p>本份简历的内容模块</p><p class="hint">模块顺序由生成时的经历排序决定。</p>'}</div>`;
-}
-function aiPanel() {
-  const c = S.v2.active;
-  return `<div class="gen-tabs"><strong>评论 · 补卡</strong><span>${S.v2.comments.length ? `${S.v2.comments.filter((x) => !x.resolved).length} 条待处理` : ''}</span></div>
-    <div class="side-body"><div class="comment-list">${S.v2.comments.length ? S.v2.comments.map((x) => `<div class="comment ${x.resolved ? 'resolved' : ''}" data-comment="${esc(x.comment_id)}"><b>${esc(x.question)}</b><small>${esc(x.reason || '')}${x.resolved ? ' · 已补卡' : ''}</small></div>`).join('') : '<p class="hint">生成简历后，这里会出现“值得补的方向”。</p>'}</div>
-    ${c ? `<div class="ai-question">${esc(c.question)}</div><textarea id="gap-answer" placeholder="回答上面的问题（具体做法、数字、结果…）"></textarea><div class="row"><button class="primary" data-action="gap">补卡并重写这一段</button><button data-action="close-comment">关闭</button></div><p class="hint" id="gap-hint"></p>` : '<p class="hint">点正文旁的气泡，或上方评论，开始补卡。</p>'}
-    <button data-action="gen-comments">生成/刷新评论</button></div>`;
-}
-
-/* ---------------- 生成动作 ---------------- */
-async function doScan() {
-  const jd = ($('#jd-input')?.value || '').trim(); if (jd.length < 20) return toast('请先粘贴完整 JD');
-  S._jd = jd; S.v2.busy = true; render();
-  try {
-    const st = await getJson('/api/v2/state'); S.v2.cards = st.cards || []; S.v2.experiences = st.experiences || [];
-    const run = await postJson('/api/v2/scan', { jd }); S.v2.scan = run.scan;
-    const ja = run.scan.jd_analysis || {};
-    S.v2.strategy = { jd_focus: ja.jd_focus || '', hook_level: ja.hook_level || 'L2', body_pattern: ja.body_pattern || 'CAR' };
-    S.v2.sel = new Map();
-    for (const r of run.scan.experience_rankings || []) {
-      const m = new Map();
-      for (const c of r.selected_cards || []) m.set(c.card_id, true);
-      for (const card of S.v2.cards.filter((c) => c.exp_id === r.exp_id)) if (!m.has(card.card_id)) m.set(card.card_id, false);
-      S.v2.sel.set(r.exp_id, m);
-    }
-    S.v2.runId = run.run_id; S.v2.comments = []; S.v2.busy = false; toast('扫描完成，可调整选卡'); render();
-  } catch (e) { S.v2.busy = false; render(); toast('扫描失败：' + e.message); }
-}
-async function doGenerate() {
-  if (!S.v2.runId) return toast('先扫描');
-  const selections = [...S.v2.sel.entries()].map(([exp_id, m]) => ({ exp_id, card_ids: [...m.entries()].filter(([, v]) => v).map(([c]) => c), strategy: S.v2.strategy })).filter((x) => x.card_ids.length);
-  if (!selections.length) return toast('至少选一张卡');
-  S.v2.busy = true; render();
-  try {
-    const run = await postJson('/api/v2/compose', { run_id: S.v2.runId, selections }); S.v2.busy = false;
-    await loadProfile();
-    renderResumeIntoPaper(run);
-    const r = current();
-    if (r && /^未命名简历/.test(r.name)) { const pname = String(S.nodes[1]?.text || '').split('\n')[0].replace(/^#\s*/, '') || '我的'; const jdTitle = (S._jd || '').match(/^#\s*(.+)/)?.[1] || '定向简历'; r.name = pname + ' · ' + jdTitle.slice(0, 12); }
-    toast('已生成，正在生成评论…'); await refreshComments(true); S.side = 'ai'; render(); renderBubbles();
-  } catch (e) { S.v2.busy = false; render(); toast('生成失败：' + e.message); }
-}
-function renderResumeIntoPaper(run) {
-  const order = { internship: 0, work: 1, project: 2, campus: 2, volunteer: 3, other: 4 };
-  const experiences = [...(run.content?.experiences || [])].sort((a, b) => (order[a.category] ?? 9) - (order[b.category] ?? 9));
-  const bySec = new Map(); for (const e of experiences) { const sec = sectionOf[e.category] || '其他经历'; if (!bySec.has(sec)) bySec.set(sec, []); bySec.get(sec).push(e); }
-  const name = String(S.nodes[1]?.text || '').split('\n')[0].replace(/^#\s*/, '') || '候选人';
-  const profile = String(S.nodes[1]?.text || '');
-  const eduLines = profile.split('\n').slice(1).map((l) => l.trim()).filter((l) => l && !/^\*\*时间：/.test(l) && !/^时间：/.test(l));
-  let html = `<h1>${esc(name)}</h1><h2>教育背景</h2>${eduLines.map((l) => /^[-*]\s/.test(l) ? `<ul><li>${inline(l.replace(/^[-*]\s+/, ''))}</li></ul>` : `<p>${inline(l)}</p>`).join('')}`;
-  for (const [sec, list] of bySec) { html += `<h2>${esc(sec)}</h2>`; for (const e of list) { html += `<h3>${esc(e.title)}</h3>`; if (e.project_background) html += `<p class="gen-bg">${esc(e.project_background)}</p>`; html += '<ul>'; for (const b of e.bullets || []) { const over = [...String(b.content || '')].length > 80; html += `<li data-bullet="${esc(b.bullet_id)}"><span class="hook">【${esc(b.hook)}】</span>${esc(b.content)}${over ? `<span class="overbadge">超长</span>` : ''}<span class="chip" data-quote="${esc(b.raw_quote || '')}" title="点开看原话">${esc((e.cards || []).find((c) => c.card_id === b.card_id)?.quality_grade || '卡')}</span></li>`; } html += '</ul>'; } }
-  const paper = $('#paper'); if (!paper) return; paper.innerHTML = html;
-  paper.querySelectorAll('.chip').forEach((ch) => (ch.onclick = (ev) => { ev.stopPropagation(); toast('原话：' + ch.dataset.quote); }));
-  const r = current(); if (r) r.html = paper.innerHTML;
-}
-async function refreshComments(silent = false) {
-  if (!S.v2.runId) return toast('先生成简历');
-  try { const run = await postJson('/api/v2/comments', { run_id: S.v2.runId }); S.v2.comments = run.comments || []; if (!silent) toast(`评论已刷新：${S.v2.comments.length} 条`); render(); renderBubbles(); }
-  catch (e) { toast('评论生成失败：' + e.message); }
-}
-function renderBubbles() {
-  const layer = $('#bubble-layer'), paper = $('#paper'); if (!layer || !paper) return; layer.innerHTML = '';
-  const wrap = $('.paper-area'); if (!wrap) return; const items = [];
-  for (const c of S.v2.comments) {
-    const li = paper.querySelector(`[data-bullet="${c.bullet_id}"]`); if (!li) continue;
-    const br = li.getBoundingClientRect(), pr = paper.getBoundingClientRect(), wr = wrap.getBoundingClientRect();
-    const b = document.createElement('div'); b.className = 'gxbubble' + (c.resolved ? ' resolved' : '');
-    b.innerHTML = `<b>💬 ${esc(c.question.slice(0, 32))}${c.question.length > 32 ? '…' : ''}</b><small>点我回答 · 补卡</small>`;
-    b.style.top = `${br.top - wr.top - 4}px`; b.style.left = `${pr.right - wr.left + 8}px`;
-    b.onclick = () => { S.v2.active = c; S.side = 'ai'; render(); };
-    layer.appendChild(b); items.push({ el: b, top: br.top - wr.top - 4 });
-  }
-  items.sort((a, b) => a.top - b.top); let last = -1e9;
-  for (const it of items) { const h = it.el.offsetHeight || 52; const top = Math.max(it.top, last + 6); it.el.style.top = top + 'px'; last = top + h; }
-}
-async function doGap() {
-  const c = S.v2.active; if (!c) return toast('先点一条评论');
-  const answer = ($('#gap-answer')?.value || '').trim(); if (answer.length < 4) return toast('请先回答具体做法或结果');
-  try {
-    const r = await postJson('/api/v2/gap', { run_id: S.v2.runId, comment_id: c.comment_id, answer });
-    if (r.insufficient) { $('#gap-hint').textContent = '还差一点：' + (r.question || '再补充一个具体动作或结果'); return; }
-    S.v2.run = r.run; S.v2.comments = r.run.comments || []; S.v2.active = null;
-    renderResumeIntoPaper(r.run); render(); renderBubbles(); toast(`已补卡「${r.card.toc_title}」并重写该段`);
-  } catch (e) { toast('补卡失败：' + e.message); }
-}
-
 /* ---------------- 设置 ---------------- */
 let syncInfo = null;
 function renderSettings() {
-  $('#app').innerHTML = `<div class="simple"><h2>模型连接</h2><p>密钥只保存在本机配置；页面只显示是否已配置，环境变量优先。</p>
+  $('#app').innerHTML = `<div class="simple"><h2>模型连接</h2><button data-action="debug">提示词调试</button><p>密钥只保存在本机配置；页面只显示是否已配置，环境变量优先。</p>
     <label>接口地址<input id="model-base" placeholder="https://api.deepseek.com/chat/completions"></label>
     <label>模型名称<input id="model-name" placeholder="deepseek-flash"></label>
     <label>API 密钥（留空保持原值）<input id="model-key" type="password" autocomplete="off"></label>
@@ -574,46 +427,30 @@ async function loadSyncStatus() { try { syncInfo = await getJson('/api/sync/sett
 async function syncConfig() { try { await postJson('/api/sync/settings', { token: $('#sync-token').value.trim() }); toast('令牌已保存'); loadSyncStatus(); } catch (e) { toast('保存失败：' + e.message); } }
 async function syncAction(kind) { try { const r = await postJson(`/api/sync/${kind}`, {}); toast(kind === 'push' ? `已同步${r.files != null ? '：' + r.files + ' 个文件' : ''}` : '已从私有仓库恢复'); } catch (e) { toast('同步失败：' + e.message); } }
 
-/* ---------------- 帮助 ---------------- */
-function renderHelp() {
-  $('#app').innerHTML = `<div class="simple"><h2>使用说明</h2>
-    <p><b>经历库</b>：点击图谱节点查看/编辑经历；＋ 新建经历；右侧助手可补充内容，或让 AI 提几个补充问题。</p>
-    <p><b>简历</b>：新建简历 → 粘贴 JD → 「扫描并推荐」→ 在右侧确认/调整选卡 → 「生成简历」→ 点正文旁气泡（或右侧评论）回答，自动补卡并重写该段。</p>
-    <p><b>生成口径</b>：Hook 层级（L1 功能直白 / L2 行业术语 / L3 架构权衡）+ 正文骨架（XYZ 成果 / CAR 痛点 / PAR 流程），可在生成前调整。</p>
-    <p><b>数据</b>：经历、简历、模型配置均保存在本机；设置页可配置模型与私有仓库同步。</p>
-    <button data-go="wiki">返回经历库</button></div>`;
-}
 
-/* ---------------- 事件 ---------------- */
-function onClick(e) {
-  const goEl = e.target.closest('[data-go]'); if (goEl) { go(goEl.dataset.go); return; }
-  const tab = e.target.closest('[data-close-tab]'); if (tab) { const id = tab.dataset.closeTab; S.opened = S.opened.filter((x) => x !== id); if (S.activeResume === id) { S.activeResume = S.opened[0] || null; if (!S.activeResume) S.screen = 'resumes'; } render(); return; }
-  const open = e.target.closest('[data-open]'); if (open) { openResume(open.dataset.open); return; }
-  const folder = e.target.closest('[data-folder]'); if (folder) { S.folder = folder.dataset.folder; render(); return; }
-  const node = e.target.closest('[data-node]'); if (node) { selectDoc(node.dataset.node); return; }
-  const closeDoc = e.target.closest('[data-close-doc]'); if (closeDoc) { const i = Number(closeDoc.dataset.closeDoc); S.docTabs = S.docTabs.filter((x) => x !== i); if (S.activeDoc === i) S.activeDoc = S.docTabs[0] ?? 1; render(); return; }
-  const cm = e.target.closest('[data-comment]'); if (cm) { S.v2.active = S.v2.comments.find((x) => x.comment_id === cm.dataset.comment); S.side = 'ai'; render(); return; }
-  const gz = e.target.closest('[data-graph-zoom]');
-  if (gz) { Graph.api?.zoom(gz.dataset.graphZoom === 'in' ? 1.2 : 0.84); const zl = document.getElementById('zoom-label'); if (zl) zl.textContent = Math.round((Graph.zoom || 1) * 100) + '%'; return; }
-  const gt = e.target.closest('[data-graph-toggle]');
-  if (gt) { if (gt.dataset.graphToggle === 'rotate') S.graphRotate = !S.graphRotate; else S.graphLabels = !(S.graphLabels !== false); renderWiki(); return; }
-  const gm = e.target.closest('[data-graph-mode]');
-  if (gm) { S.graphMode = gm.dataset.graphMode; Graph.pos = null; renderWiki(); return; }
-  const fmt = e.target.closest('[data-format]'); if (fmt) { S.formatTab = fmt.dataset.format; render(); return; }
-  const act = e.target.closest('[data-action]'); if (!act) return;
-  const a = act.dataset.action;
-  const map = {
-    new: () => newResume(), save: () => saveResume(), back: () => { S.screen = 'resumes'; render(); },
-    copy: () => { const r = current(); const c = { ...r, id: 'r_' + Date.now().toString(36), name: r.name + ' 副本' }; S.resumes.unshift(c); openResume(c.id); },
-    rename: () => { const r = current(); const name = prompt('简历名称', r.name); if (!name) return; r.name = name.trim().slice(0, 40); render(); },
-    'save-doc': () => saveDoc(), 'wiki-send': () => wikiSend(), 'wiki-ask': () => wikiAsk(), 'new-node': () => newNode(),
-    'side-gen': () => { S.side = 'gen'; render(); }, 'side-format': () => { S.side = 'format'; render(); }, 'side-ai': () => { S.side = 'ai'; render(); renderBubbles(); },
-    scan: () => doScan(), gen: () => doGenerate(), 'gen-comments': () => refreshComments(),
-    gap: () => doGap(), 'close-comment': () => { S.v2.active = null; render(); },
-    'save-model': () => saveModel(), 'sync-config': () => syncConfig(), 'sync-push': () => syncAction('push'), 'sync-pull': () => syncAction('pull'),
-    'reset-graph': () => { Graph.pos = null; Graph.api?.reset(); drawGraph(); },
-  };
-  if (map[a]) { e.preventDefault(); map[a](); }
+function renderHelp(){ $('#app').innerHTML='<div class="simple"><h2>使用说明</h2><p>经历库：选择经历后补充原话，点击节点编辑 Markdown。基础信息独立保存。</p><p>简历：输入 JD → 调整大纲 → 生成并审阅 → 编辑排版 → 保存／导出。历史可恢复。</p><p>AI 评论可提出表达建议或补充事实，事实回答先写入经历库，再提出局部改稿。</p><button data-action="debug">提示词与运行调试</button></div>'; }
+const studio=createStudio({S,$,esc,toast,getJson,postJson,render,loadWiki,loadProfile});
+const loadResumes=()=>studio.loadResumes();
+const renderResumes=()=>studio.renderResumes();
+const renderEditor=()=>studio.renderEditor();
+async function onClick(e){
+ const t=e.target;
+ const goEl=t.closest('[data-go]');if(goEl){await studio.flush().catch(()=>{});go(goEl.dataset.go);return;}
+ const open=t.closest('[data-open]');if(open){await studio.flush().catch(()=>{});studio.openResume(open.dataset.open);return;}
+ const tab=t.closest('[data-close-tab]');if(tab){await studio.flush().catch(()=>{});const id=tab.dataset.closeTab;S.opened=S.opened.filter(x=>x!==id);if(S.activeResume===id){S.activeResume=S.opened[0]||null;if(!S.activeResume)S.screen='resumes';}render();return;}
+ if(t.dataset.folder){S.folder=t.dataset.folder;render();return;}
+ if(t.dataset.node!==undefined){selectDoc(t.dataset.node);return;}
+ if(t.dataset.closeDoc!==undefined){const i=+t.dataset.closeDoc;S.docTabs=S.docTabs.filter(x=>x!==i);if(S.activeDoc===i)S.activeDoc=S.docTabs[0]??1;render();return;}
+ if(t.dataset.graphMode){S.graphMode=t.dataset.graphMode;Graph.pos=null;renderWiki();return;}
+ if(t.dataset.graphZoom){Graph.api?.zoom(t.dataset.graphZoom==='in'?1.2:.84);return;}
+ if(t.dataset.graphToggle){if(t.dataset.graphToggle==='rotate')S.graphRotate=!S.graphRotate;else S.graphLabels=!S.graphLabels;renderWiki();return;}
+ const a=t.closest('[data-action]')?.dataset.action;
+ const actions={'archive-node':async()=>{const n=S.nodes[S.activeDoc];if(!n?.id)return toast('基础信息不能归档');if(confirm('归档后不再用于生成，仍可恢复。')){await postJson('/api/wiki/archive',{node_id:n.id});await loadWiki();}},'restore-node':async()=>{const d=await getJson('/api/wiki');const a=d.index.nodes.filter(n=>n.status==='archived');const key=prompt(a.map((n,i)=>`${i+1}. ${n.title}`).join('\n')+'\n输入序号恢复');if(a[+key-1]){await postJson('/api/wiki/archive',{node_id:a[+key-1].id,restore:true});await loadWiki();}},'save-doc':saveDoc,'wiki-send':wikiSend,'wiki-ask':wikiAsk,'new-node':newNode,'save-model':saveModel,'sync-config':syncConfig,'sync-push':()=>syncAction('push'),'sync-pull':async()=>{await syncAction('pull');await loadWiki();await loadProfile();await loadResumes();},'reset-graph':()=>{Graph.pos=null;Graph.api?.reset();drawGraph();},debug:showDebug};
+ if(actions[a]){await actions[a]();return;}await studio.onClick(e);
 }
-
+async function showDebug(){
+ const d=await getJson('/api/prompts');const dlg=$('#dialog');
+ dlg.innerHTML='<h2>提示词调试</h2><select id="prompt-task">'+d.items.map(p=>`<option>${esc(p.task)}</option>`).join('')+'</select><textarea id="prompt-value" style="height:350px"></textarea><p>保存后下一次任务使用新版本。运行输入输出可从简历的任务记录查看。</p><button id="prompt-save">保存</button><button id="prompt-close">关闭</button>';
+ const pick=()=>{$('#prompt-value').value=d.items.find(p=>p.task===$('#prompt-task').value).prompt;};$('#prompt-task').onchange=pick;pick();$('#prompt-save').onclick=async()=>{await postJson('/api/prompts',{task:$('#prompt-task').value,prompt:$('#prompt-value').value});toast('提示词已保存');};$('#prompt-close').onclick=()=>dlg.close();dlg.showModal();
+}
 init();

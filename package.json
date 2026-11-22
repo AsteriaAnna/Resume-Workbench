@@ -1,0 +1,1 @@
+{"name":"resume-workbench","version":"0.3.0","private":true,"type":"module","engines":{"node":">=22"},"scripts":{"start":"node prototype/serve.mjs","test":"node --test prototype/tests/studio.test.mjs prototype/tests/document.test.mjs","test:legacy":"node prototype/tests/v01.test.mjs && node prototype/tests/storage.test.mjs && node prototype/tests/retrieval-type.test.mjs"}}
