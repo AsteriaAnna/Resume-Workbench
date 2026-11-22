@@ -11,7 +11,7 @@ const readJson=async(file,fallback)=>{try{return JSON.parse(await fs.readFile(fi
 const writeJson=async(file,value)=>{await fs.mkdir(path.dirname(file),{recursive:true});const temp=`${file}.${randomUUID()}.tmp`;await fs.writeFile(temp,JSON.stringify(value,null,2),'utf8');await fs.rename(temp,file)};
 
 export async function resumes(){return readJson(path.join(root,'resumes.json'),[])}
-export async function saveResumes(items){if(!Array.isArray(items)||items.length>500||items.some(x=>!x||typeof x.id!=='number'||typeof x.name!=='string'||typeof x.html!=='string'||x.html.length>200000))throw Error('简历资料格式不正确');await writeJson(path.join(root,'resumes.json'),items);return items}
+export async function saveResumes(items){if(!Array.isArray(items)||items.length>500||items.some(x=>!x||!((typeof x.id==='number')||(typeof x.id==='string'&&x.id.length>0&&x.id.length<=64))||typeof x.name!=='string'||typeof x.html!=='string'||x.html.length>200000))throw Error('简历资料格式不正确');await writeJson(path.join(root,'resumes.json'),items);return items}
 
 export async function syncSettings(){const value=await readJson(configFile,{});return {repo,configured:Boolean(value.token),last_sync:await readJson(path.join(root,'sync-state.json'),null)}}
 export async function setSyncToken(token){if(typeof token!=='string'||!/^gh[psu]_[A-Za-z0-9_]{20,}$|^github_pat_[A-Za-z0-9_]{20,}$/.test(token))throw Error('请填写 GitHub Personal Access Token');await writeJson(configFile,{token});return syncSettings()}

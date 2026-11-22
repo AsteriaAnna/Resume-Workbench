@@ -1,2 +1,28 @@
-<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>履历 · 页面原型</title><link rel="stylesheet" href="style.css"></head><body><header><button class="brand" data-go="wiki">履历 <small>WORKSPACE</small></button><div id="tabs"></div><button data-action="new" aria-label="新建简历">＋</button><a class="debug-link" href="/debug" title="查看 AI 流程与运行记录">流程调试</a><span class="prototype">交互原型 · 示例数据</span></header><aside class="rail"><button data-go="wiki"><b>◉</b>经历库</button><button data-go="resumes"><b>▤</b>简历</button><div class="spacer"></div><button data-go="settings"><b>⚙</b>设置</button><button data-go="help"><b>?</b>帮助</button></aside><main id="app"></main><dialog id="dialog"></dialog><div id="toast" role="status"></div><script type="module" src="app.js"></script></body></html>
-
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>履历 · 工作台</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <button class="brand" data-go="wiki">履历 <small>WORKSPACE</small></button>
+  <div id="tabs"></div>
+  <button data-action="new" aria-label="新建简历">＋</button>
+  <span class="prototype">语义扫描 · 卡片选点 · 补卡闭环</span>
+</header>
+<aside class="rail">
+  <button data-go="wiki"><b>◉</b>经历库</button>
+  <button data-go="resumes"><b>▤</b>简历</button>
+  <div class="spacer"></div>
+  <button data-go="settings"><b>⚙</b>设置</button>
+  <button data-go="help"><b>?</b>帮助</button>
+</aside>
+<main id="app"></main>
+<dialog id="dialog"></dialog>
+<div id="toast" role="status"></div>
+<script type="module" src="app.js"></script>
+</body>
+</html>
