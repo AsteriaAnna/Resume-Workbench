@@ -1,28 +1,65 @@
-# 简历工作台
+# 简历工作台 · 核心链路
 
-双击 `启动页面原型.cmd`，在浏览器访问 http://127.0.0.1:4321 。需要本机 Node.js。
+> 当前仓库**只有模型链路与数据层**，前端（页面/图谱/调试台）已移除。
+> 目标：把关键环节的输入、输出和质量闸门测清楚，再谈展示。
 
-需要调试 AI 链路时，点击工作台顶部「流程调试」，或打开 http://127.0.0.1:4321/debug 。可查看流程连接、Wiki 节点与关系索引，编辑各 AI 节点提示词、配置模型、单节点试跑、按同一 JD 复跑和比较结果。使用说明见 [流程调试台](design/流程调试台-2026-11-21.md)。
+## 链路
 
-## 当前可用
+```
+raw 原始口述 → ① 建卡 → cards.json → ② JD 语义扫描 → run.scan
+             → ③ 三区编译（背景 + Hook + 正文）→ run.content
+             → ④ 评论 → run.comments → ⑤ 补卡 → 新卡 + 该段重编译
+```
 
-- 经历库：通过“新建经历文档”显式创建经历；对话补充须先选择已有经历节点，服务端会拒绝无关内容。原话和对话按经历留存，再生成带稳定锚点的 Markdown 正文、故事、片段、主题和索引。图谱可针对所选经历提出补充问题。基础信息保存在本机资料库。
-- 每段 Experience 都保存原始经历类型：公司实习、正式工作、独立项目、校园经历、志愿活动或其他／待确认。AI 在入库时判断，用户可在经历正文上方更正。Story 和 Fragment 继承所属经历，不另定简历栏目。
-- 简历制作：输入 JD 后生成定向大纲，可用评论修改；随后生成正文。按完整经历形成简历条目，故事和片段作为条目内部的证据。通过来源与内容校验后才覆盖当前简历；审阅建议保留在运行记录中。用户仍需核对最终表达。
-- 简历管理：在本机资料库中保存、复制、另存、重命名和编辑简历，并调整字号、行距和留白。
-- 私有资料同步：在“设置”中输入有权访问 `AsteriaAnna/esume-Workbench-data` 的 GitHub Personal Access Token，可把新工作台保存的资料压缩备份到该私有仓库；仅在空资料库中允许恢复。旧版归档不会自动迁移。令牌只保存在本机 `prototype/.local-github.json`，不会加入资料备份或公开代码仓库。同步目前由用户在设置页手动触发。
+详细说明：
+- [prototype/docs/MODEL-PIPELINE.md](prototype/docs/MODEL-PIPELINE.md) — 每个阶段的提示词、参数、质量闸门
+- [prototype/docs/DATA-CONTRACT.md](prototype/docs/DATA-CONTRACT.md) — 数据目录结构与引用不变量
 
-## V0.1 底层
+## 快速开始
 
-实现依据是《JD 驱动的经历维基与内容生成：产品逻辑及工程整理》第九节。存储位于 `prototype/local-data/`：原始输入、快照与 JD 运行记录分开保存。失败更新不切换当前快照。Experience、Story、Fragment、Topic、Relation 和 SourceRef 具有稳定 ID；正文锚点、归属、来源引用在写入前校验。
+需要 Node 20+，零依赖。
 
-JD 链路包括策略、QueryPlan、按 Experience 的索引检索、逐要求按经历全文兜底、证据与贡献评估、选材、大纲、评论修订、成稿及核验。经历的索引线索汇总自身与子故事、片段、主题；检索和评估的候选始终是完整 Experience，选中后才读取内部故事作为写作材料。`fulltext`、`index`、`index_fallback` 三种模式可用于对照运行。密钥从本机配置或环境变量读取，不发送给页面；本地资料和密钥已列入 `.gitignore`。
+```bash
+# 1) 看一眼知识库
+node prototype/cli.mjs state
 
-模拟测试覆盖选中补充、无关输入拒绝、片段升级、提问兜底、两份 JD × 三种检索方式、大纲修订、成稿、失败回滚和本机简历保存。真实模型的隔离试跑已完成入库、大纲和成稿校验；这只说明链路可运行，不代表简历表达已通过人工质量评估。具体发现见 [交互链路测试与问题定位](design/交互链路测试与问题定位-2026-11-20.md)。
+# 2) 离线跑通（不调用模型）
+DEEPSEEK_MOCK=1 node prototype/cli.mjs pipeline --jd-file 回归集/jd-01-市场部实习生.md
 
-页面端到端复测与仍存在的内容重复问题见 [工作台端到端测试](design/工作台端到端测试-2026-11-20.md)。
+# 3) 真实模型（需要数据目录和 DeepSeek 密钥）
+$env:WORKBENCH_DATA_DIR="$PWD\..\沙盒数据-真实语料-v3"
+node prototype/cli.mjs scan --jd-file ../回归集/jd-01-市场部实习生.md
+node prototype/cli.mjs compose --run v2run_xxx
+node prototype/cli.mjs comments --run v2run_xxx
+node prototype/cli.mjs gap --run v2run_xxx --comment cm_1 --answer "补充：口径是……"
+node prototype/cli.mjs check --run v2run_xxx
 
-经历类型与检索单位的修正、模拟测试和真实模型复测见 [经历类型与按经历召回复测](design/经历类型与按经历召回复测-2026-11-21.md)。
+# 4) 只启 JSON API（无前端）
+node prototype/serve.mjs   # GET /health；/api/v2/*
+```
 
-正式导出、自动同步和模块重排尚未实现。新工作台的资料不会从旧归档或旧浏览器缓存自动导入。
+## 测试
 
+```bash
+npm test                      # mock 链路 + 数据契约（离线、确定性）
+npm run test:live             # 真实模型冒烟（LIVE=1 且配置密钥）
+```
+
+测试覆盖：
+- 扫描输出结构、选卡引用合法性；
+- 编译的 1 卡 1 bullet、字数、Hook、溯源、反八股；
+- 评论锚点；补卡入库/重编译/resolved；
+- 图谱节点与边的一致性；
+- 数据目录（raw / snapshots / cards / runs）的结构与引用不变量。
+
+## 核心文件
+
+| 文件 | 作用 |
+| --- | --- |
+| `prototype/v2.mjs` | 模型链路：提示词、扫描、编译、评论、补卡、图谱、JSON 路由 |
+| `prototype/llm.mjs` | 模型连接配置（旧 Wiki 任务保留） |
+| `prototype/workbench.mjs` | 经历库/快照/原始语料读取（建卡依赖） |
+| `prototype/mock.mjs` | 离线确定性模型替身（`DEEPSEEK_MOCK=1`） |
+| `prototype/cli.mjs` | 阶段命令入口 |
+| `prototype/serve.mjs` | 精简 JSON API |
+| `prototype/tests/` | 契约测试、数据依赖测试、live 冒烟 |

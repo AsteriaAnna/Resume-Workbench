@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { state, profile } from './workbench.mjs';
+import { mockCall } from './mock.mjs';
 
 const dataRoot = path.resolve(process.env.WORKBENCH_DATA_DIR || path.join(import.meta.dirname, 'local-data'));
 const v2Root = path.join(dataRoot, 'v2');
@@ -18,6 +19,7 @@ const aiCfg = async () => {
 };
 
 async function callLLM(system, user, maxTokens = 5000, tag = '', temperature = 0.2) {
+  if (process.env.DEEPSEEK_MOCK === '1') return mockCall({ tag, system, user });
   const cfg = await aiCfg();
   if (!cfg.key) throw Object.assign(new Error('DeepSeek 密钥未配置'), { code: 'NO_KEY' });
   let last;
@@ -484,11 +486,6 @@ export async function v2route(req, res, url, { body, send }) {
       const v = await body(req);
       return json(send, res, await gapCard(v.run_id, { comment_id: v.comment_id, answer: String(v.answer || '') }));
     }
-    if (req.method === 'GET' && p === '/api/v2/demo-jd') {
-      let jd = '';
-      try { jd = await fs.readFile(path.join(process.cwd(), '回归集/jd-01-市场部实习生.md'), 'utf8'); } catch {}
-      return json(send, res, { jd: jd.trim() });
-    }
     if (req.method === 'GET' && p === '/api/v2/graph') return json(send, res, await graph());
     if (req.method === 'GET' && p === '/api/v2/run') {
       const run = await readJson(path.join(runsDir, `${url.searchParams.get('id')}.json`), null);
@@ -630,3 +627,4 @@ async function scan(jd) {
 }
 // ================= 恢复区块结束 =================
 
+export { loadCards, saveCards, scan, compose, comments, gapCard, graph, importFromWiki, rawTextFor, checkBullet };
