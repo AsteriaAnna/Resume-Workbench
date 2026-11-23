@@ -1,163 +1,241 @@
 # 简历工作台 · 核心链路说明书
 
-> 代码版本：当前 `main`（前端已移除，只保留模型链路 + 数据层）
-> 源码：`prototype/v2.mjs`（提示词、五阶段实现）、`prototype/cli.mjs`（入口）、`prototype/mock.mjs`（离线替身）
-> 配套：[DATA-CONTRACT.md](./DATA-CONTRACT.md)（数据契约）、[MODEL-PIPELINE.md](./MODEL-PIPELINE.md)（阶段参数速查）
+> 当前 `main`：只有模型链路 + 数据层，前端已移除。
+> **本页所有流程图都已渲染成 PNG 内嵌**，任何 Markdown 查看器都能看到；每张图下方保留 Mermaid 源码（可折叠）。
+> 配套：[`DATA-CONTRACT.md`](./DATA-CONTRACT.md)、[`MODEL-PIPELINE.md`](./MODEL-PIPELINE.md)
 
 ---
 
 ## 0. 一句话总览
 
-**原始口述 → 建卡 → JD 扫描（选卡 + 策略）→ 按选卡逐经历编译（背景/Hook/正文）→ 生成评论 → 回答补卡 → 新卡入库并只重编译该段。**
-
-没有前端参与；所有阶段都可以用 `node prototype/cli.mjs <stage>` 单独执行，产物全部落在数据目录的 `v2/` 下。
+**原始口述 → ① 建卡 → ② JD 扫描（选卡 + 策略）→ ③ 三区编译（背景/Hook/正文）→ ④ 评论 → ⑤ 回答补卡 → 新卡入库并只重编译该段。**
 
 ---
 
-## 1. 全链路图
+## 1. 全链路（含每阶段输入/输出）
+
+![全链路图](images/01-chain.png)
+
+<details><summary>Mermaid 源码（可编辑）</summary>
 
 ```mermaid
-flowchart LR
-  RAW[raw/*.json<br/>原始口述] --> SNAP[snapshots/rev/index.json<br/>经历库索引]
-  SNAP --> IMPORT[① 建卡<br/>PROMPT_INGEST]
-  IMPORT --> CARDS[(v2/cards.json<br/>6 槽位 + S/A/B)]
-  JD[目标 JD] --> SCAN[② 语义扫描<br/>PROMPT_SCAN]
+flowchart TB
+  subgraph IN["输入"]
+    RAW["raw/*.json"]
+    SNAP["snapshots/index.json"]
+    JD["目标 JD"]
+    SEL["selections（选卡/策略）"]
+    ANS["补卡回答"]
+  end
+  IMP["① import · PROMPT_INGEST"]
+  CARDS[("cards.json")]
+  SCAN["② scan · PROMPT_SCAN"]
+  RUN1[("run.scan")]
+  COMP["③ compose · PROMPT_COMPILE"]
+  FIT["③.5 fit · PROMPT_FIT"]
+  RUN2[("run.content")]
+  CMT["④ comments · PROMPT_COMMENTS"]
+  RUN3[("run.comments")]
+  GAP["⑤ gap · PROMPT_GAPCARD"]
+  RAW --> IMP
+  SNAP --> IMP
+  IMP -->|"输出 cards"| CARDS
+  JD --> SCAN
   CARDS --> SCAN
-  SCAN --> SCANOUT[(run.scan<br/>jd_analysis + rankings + gaps)]
-  SCANOUT --> COMPOSE[③ 三区编译<br/>PROMPT_COMPILE]
-  CARDS --> COMPOSE
-  COMPOSE --> FIT[字数/风格归一化<br/>PROMPT_FIT + 扩写 + hardTrim]
-  FIT --> CONTENT[(run.content<br/>background + bullets)]
-  CONTENT --> COMMENTS[④ 评论<br/>PROMPT_COMMENTS]
-  COMMENTS --> CMT[(run.comments<br/>锚定 bullet)]
-  CMT --> GAP[⑤ 补卡<br/>PROMPT_GAPCARD]
-  GAP -->|回答足够| NEWCARD[新卡入库<br/>source=gap]
-  NEWCARD --> CARDS
-  GAP -->|回答不足| FOLLOW[追问 insufficient<br/>不改库]
-  NEWCARD --> RECOMPILE[只重编译该经历]
-  RECOMPILE --> CONTENT
+  SCAN -->|"输出 scan"| RUN1
+  RUN1 --> COMP
+  CARDS --> COMP
+  SEL -->|"支线"| COMP
+  COMP --> FIT
+  FIT -->|"输出 content"| RUN2
+  RUN2 --> CMT
+  RUN1 -.->|"gaps"| CMT
+  CMT -->|"输出 comments"| RUN3
+  RUN3 --> GAP
+  ANS -->|"支线"| GAP
+  RAW -.->|"原话"| GAP
+  GAP -->|"新卡"| CARDS
+  GAP -->|"重编译"| COMP
+```
+
+</details>
+
+### 1.1 每阶段输入输出总表
+
+| # | 阶段 | 必填输入 | 支线/可选输入 | 输出 | 落盘 | 失败/分支 |
+| --- | --- | --- | --- | --- | --- | --- |
+| ① | import | `raw/*.json`（experience_id + messages）、`snapshots/<rev>/index.json` | `wiki/*.md`（正文补充） | `spine_summary` + `story_cards[]` | `v2/cards.json`（含 S/A/B、is_verified） | 解析失败记 error 并继续；全部失败抛 IMPORT_FAILED |
+| ② | scan | 目标 JD、`cards.json` 全部经历与卡片 | —（当前无额外输入） | `jd_analysis`（jd_focus / hook_level / body_pattern）+ `experience_rankings`（选卡 / match_reason / gaps） | `v2/runs/<run_id>.json` 的 `scan` | 无卡片抛 NO_CARDS；模型 JSON 失败重试 1 次后报错 |
+| ③ | compose | `run_id`、`selections`（exp_id + card_ids）、卡片事实、经历主干 | `strategy` 覆盖、`match_reason`、旧字段 `recommended_strategy`（兼容回退） | `project_background` + `bullets[]`（focus_angle / hook / content / raw_quote / checks） | `run.content` | 单段失败只记录该段 error；所有段失败则 run.content 为空 |
+| ③.5 | fit | 超限/违规的 bullet、对应卡片 facts | 上一步的 checks | 改写后的 background/content | 回写 `run.content` | 3 轮仍不合规 → hardTrim 兜底 |
+| ④ | comments | `run.content` 的 bullets | `scan.gaps`、未选中的 S/A 卡、JD | `comments[]`（锚定 bullet_id，≤4） | `run.comments` | 模型失败时用 gaps 兜底 3 条；非法锚点丢弃 |
+| ⑤ | gapCard | `run_id` + `comment_id` + `answer` | 该经历 raw 原话（缺失时用 `exp.raw_text`） | 新卡（source=gap）或 `insufficient` + 追问；成功则该段重编译 | `cards.json` + `run.comments[].resolved` | 回答不足不改库；缺 comment/exp 报错 |
+
+---
+
+## 2. 支线输入（旁路输入）明确化
+
+![支线输入图](images/06-side-inputs.png)
+
+<details><summary>Mermaid 源码（可编辑）</summary>
+
+```mermaid
+flowchart TB
+  subgraph SRC["支线输入"]
+    SEL["selections"]
+    STRAT["strategy 覆盖"]
+    MATCH["match_reason"]
+    LEGACY["recommended_strategy（兼容）"]
+    GAPS["scan.gaps"]
+    UNSEL["未选中 S/A 卡"]
+    ANS["用户回答"]
+    RAW["raw 原话"]
+    ENV["环境变量"]
+  end
+  COMPOSE["compose"]
+  COMMENTS["comments"]
+  GAP["gapCard"]
+  SEL --> COMPOSE
+  STRAT --> COMPOSE
+  MATCH --> COMPOSE
+  LEGACY --> COMPOSE
+  GAPS --> COMMENTS
+  UNSEL --> COMMENTS
+  ANS --> GAP
+  RAW --> GAP
+  ENV -.-> COMPOSE
+  ENV -.-> COMMENTS
+  ENV -.-> GAP
+```
+
+</details>
+
+| 支线输入 | 来源 | 消费阶段 | 是否必需 | 不提供/缺失时的行为 |
+| --- | --- | --- | --- | --- |
+| `selections`（选卡 + 顺序） | 用户/CLI 自动用扫描推荐 | compose | 是（至少 1 张卡） | compose 无有效选卡 → 该段跳过；全空则报“没有可编译的选卡” |
+| `strategy={jd_focus, hook_level, body_pattern}` | 扫描结果，可被 selections 覆盖 | compose | 否 | 回退 `scan.jd_analysis`；再回退旧字段 `recommended_strategy.depth` → L2 / CAR |
+| `match_reason` | scan 的 selected_cards | compose（单点聚焦） | 否 | 空字符串；不阻断生成，但正文可能不够聚焦 |
+| `scan.gaps` | scan | comments | 否 | 空数组；评论只看未选卡 |
+| 未选中的 S/A 卡 | cards.json | comments | 否 | 不参与评论候选 |
+| `answer`（补卡回答） | 用户 | gapCard | 是 | 缺回答直接报错；回答太短/没有事实 → 模型返回 insufficient + 追问 |
+| `raw` 原话 | raw/*.json | gapCard | 否 | 回退 `experience.raw_text`；仍为空则模型只能基于问题和回答 |
+| 环境变量 `DEEPSEEK_MOCK` | 运行环境 | 所有模型调用 | 否 | =1 时不调模型，用 mock.mjs 的确定性输出 |
+| 环境变量 `WORKBENCH_DATA_DIR` | 运行环境 | 所有阶段 | 是 | 默认 `prototype/local-data` |
+| 旧版字段 `recommended_strategy` | 旧 run | compose（兼容） | 否 | 仅用于回退 depth → hook_level |
+| `profile.json` | 数据目录 | 旧版渲染 | 否 | **核心链路不读它**（只有前端排版用） |
+| 历史 `runs/` | 数据目录 | 审计/测试 | 否 | 不参与生成；cards 重建后旧 run 变 stale |
+| `graph()` | cards.json | 观察/展示 | 否 | 只读，不影响生成 |
+
+---
+
+## 3. 数据依赖
+
+![数据依赖图](images/02-data-deps.png)
+
+<details><summary>Mermaid 源码（可编辑）</summary>
+
+```mermaid
+flowchart TB
+  RAW["raw/*.json"]
+  SNAP["snapshots/index.json"]
+  WIKI["snapshots/wiki/*.md"]
+  PROFILE["profile.json"]
+  JD["JD 文本"]
+  CARDS[("cards.json")]
+  RUN[("runs/run_id.json")]
+  IMP["importFromWiki"]
+  SCAN["scan"]
+  COMP["compose"]
+  CMT["comments"]
+  GAP["gapCard"]
+  RAW --> IMP
+  SNAP --> IMP
+  WIKI --> IMP
+  IMP --> CARDS
+  JD --> SCAN
+  CARDS --> SCAN
+  SCAN --> RUN
+  CARDS --> COMP
+  RUN --> COMP
+  COMP --> RUN
+  RUN --> CMT
+  CMT --> RUN
+  RUN --> GAP
+  GAP --> CARDS
+  GAP --> COMP
+  PROFILE -.->|"旧版渲染使用"| RUN
+```
+
+</details>
+
+### 3.1 不变量（违反即数据坏了）
+
+1. `cards[].exp_id` 必须存在于 `experiences[].exp_id`；`card_id` 全局唯一；
+2. `quality_grade ∈ {S,A,B}`；`raw_quote` 非空；`is_verified=true`；
+3. `run.scan.selected_cards[].card_id` ⊆ 当前 `cards`；
+4. `run.content.bullets[].card_id` ⊆ 当前 `cards`，且 `raw_quote` 非空；
+5. `run.comments[].bullet_id` ⊆ 该 run 的 bullets；
+6. **重建 `cards.json` 会让之前的 run 变成 stale**（引用被删卡片的 run 失效）：历史 run 要么归档，要么只校验当前卡片版本内的 run。
+
+### 3.2 数据目录
+
+```text
+<DATA>/
+├── current.json                # 最新快照号
+├── profile.json                # 基础信息（核心链路不用）
+├── raw/raw_*.json              # ① 建卡的事实来源
+├── snapshots/<rev>/index.json  # 经历库索引
+├── snapshots/<rev>/wiki/*.md   # 经历正文
+└── v2/
+    ├── cards.json              # ②③⑤ 的事实源
+    └── runs/<run_id>.json      # ②③④⑤ 的留痕
 ```
 
 ---
 
-## 2. 五阶段速查表
+## 4. 时序（一次完整调用）
 
-| # | 阶段 | 函数（v2.mjs） | 提示词 | 输入 | 输出 | 模型参数 |
-| --- | --- | --- | --- | --- | --- | --- |
-| ① | 建卡 | `importFromWiki()` | `PROMPT_INGEST` | 经历标题/类型 + raw 口述 | `spine_summary` + `story_cards[]`（6 槽位） | max_tokens 8000, T=0.3 |
-| ② | 扫描 | `scan(jd)` | `PROMPT_SCAN` | JD + 全部经历与卡片强槽位 | `jd_analysis` + `experience_rankings`（选卡/match_reason/gaps） | max_tokens 5000, T=0.2 |
-| ③ | 编译 | `compose(runId, selections)` | `PROMPT_COMPILE(s)` | 单段经历主干 + 用户选卡 + 扫描 match_reason + 策略 | `project_background` + `bullets[]` | max_tokens 4000, T=0.4 |
-| ③.5 | 归一化 | `fitExperience()` | `PROMPT_FIT` | 超限/评价收尾/重复 hook 的 bullet | 改写后的背景与正文 | max_tokens 3000/2500, T=0.2 |
-| ④ | 评论 | `comments(runId)` | `PROMPT_COMMENTS` | JD + 已生成 bullets + gaps + 未选 S/A 卡 | `comments[]`（锚定 bullet_id，最多 4 条） | max_tokens 2000, T=0.2（默认） |
-| ⑤ | 补卡 | `gapCard(runId,{comment_id,answer})` | `PROMPT_GAPCARD` | 原始口述 + 缺口问题 + 用户回答 | 新卡（或 insufficient + 追问）→ 该段重编译 | max_tokens 3000, T=0.2（默认） |
+![阶段时序图](images/03-sequence.png)
 
-所有调用都走 `response_format: json_object`，超时 240s；只有 JSON 解析失败才重试一次。
-
----
-
-## 3. 阶段时序（以一次完整 CLI/API 调用为例）
+<details><summary>Mermaid 源码（可编辑）</summary>
 
 ```mermaid
 sequenceDiagram
   autonumber
   participant U as CLI / API
-  participant C as v2.mjs
-  participant L as DeepSeek
-  participant F as 数据目录
-
-  U->>C: scan(jd)
-  C->>F: 读 v2/cards.json
-  C->>L: PROMPT_SCAN + {jd, experiences, cards}
-  L-->>C: {jd_analysis, experience_rankings}
-  C->>F: 写 runs/<run_id>.json
-  C-->>U: run_id + rankings
-
-  U->>C: compose(run_id, selections)
+  participant V as v2.mjs
+  participant M as DeepSeek
+  participant D as 数据目录
+  U->>V: scan(jd)
+  V->>D: 读 cards.json
+  V->>M: PROMPT_SCAN + JD + 卡片
+  M-->>V: jd_analysis + rankings + gaps
+  V->>D: 写 run.scan
+  U->>V: compose(run, selections)
   loop 每段经历
-    C->>L: PROMPT_COMPILE + 经历/选卡/match_reason/策略
-    L-->>C: {project_background, bullets}
-    alt 字数/风格不合规
-      C->>L: PROMPT_FIT（最多 3 轮）
-      L-->>C: 改写后的内容
-      C->>C: 仍不合规 → hardTrim 分句裁剪
+    V->>M: PROMPT_COMPILE + 经历 + 选卡 + match_reason
+    M-->>V: background + bullets
+    opt 字数或风格不合规
+      V->>M: PROMPT_FIT 最多 3 轮
+      M-->>V: 改写后的内容
     end
   end
-  C->>F: 写 run.content
-  C-->>U: 生成结果
-
-  U->>C: comments(run_id)
-  C->>L: PROMPT_COMMENTS + JD/bullets/gaps
-  L-->>C: comments[]
-  C->>F: 写 run.comments
-
-  U->>C: gap(run_id, comment_id, answer)
-  C->>L: PROMPT_GAPCARD + raw/问题/回答
-  alt insufficient
-    L-->>C: {insufficient, question}
-    C-->>U: 追问，不改库
-  else 足够
-    L-->>C: {card}
-    C->>F: cards.json 追加新卡
-    C->>C: compose 只重编译该经历
-    C->>F: run.comments 标记 resolved
-    C-->>U: 新卡 + 新内容
+  V->>D: 写 run.content
+  U->>V: comments(run)
+  V->>M: PROMPT_COMMENTS + JD + bullets + gaps
+  M-->>V: comments
+  U->>V: gap(run, comment, answer)
+  V->>M: PROMPT_GAPCARD + raw + 问题 + 回答
+  alt 回答不足
+    M-->>V: insufficient + 追问
+  else 回答足够
+    M-->>V: 新卡
+    V->>D: 写入 cards.json
+    V->>V: 只重编译该经历
   end
 ```
 
----
-
-## 4. 数据依赖图
-
-```mermaid
-flowchart TB
-  subgraph 输入层
-    RAW[raw/raw_*.json<br/>experience_id + messages]
-    SNAP[snapshots/rev/index.json<br/>nodes/relations]
-    WIKI[snapshots/rev/wiki/*.md]
-    JD[目标 JD 文本]
-    PROFILE[profile.json<br/>基础信息]
-  end
-
-  subgraph 事实层
-    CARDS[(v2/cards.json<br/>experiences + cards)]
-  end
-
-  subgraph 运行层
-    RUN[(v2/runs/run_id.json)]
-    SCAN[run.scan<br/>jd_analysis / rankings / gaps]
-    CONTENT[run.content<br/>experiences / background / bullets]
-    CMT[run.comments<br/>question / bullet_id / resolved]
-  end
-
-  RAW --> IMPORT[importFromWiki]
-  SNAP --> IMPORT
-  WIKI --> IMPORT
-  IMPORT --> CARDS
-  JD --> SCANFN[scan]
-  CARDS --> SCANFN
-  SCANFN --> RUN
-  RUN --> SCAN
-  CARDS --> COMPOSEFN[compose]
-  SCAN --> COMPOSEFN
-  COMPOSEFN --> CONTENT
-  CONTENT --> COMMENTSFN[comments]
-  COMMENTSFN --> CMT
-  CMT --> GAPFN[gapCard]
-  GAPFN -->|新卡| CARDS
-  GAPFN -->|重编译| COMPOSEFN
-  PROFILE -.旧版渲染使用.-> CONTENT
-
-  SCAN -. 引用 .-> CARDS
-  CONTENT -. 引用 .-> CARDS
-  CMT -. 引用 .-> CONTENT
-```
-
-**关键不变量**
-- `cards[].exp_id` ∈ `experiences[].exp_id`；`card_id` 唯一；
-- `run.scan.selected_cards[].card_id` ∈ `cards`；
-- `run.content.bullets[].card_id` ∈ `cards`，且 `raw_quote` 非空；
-- `run.comments[].bullet_id` ∈ 该 run 的 bullets；
-- **重建 `cards.json` 会让之前的 run 变成 stale**（引用旧测试卡的 run 会失效），所以历史 run 要么归档，要么只在当前卡片版本内校验。
+</details>
 
 ---
 
@@ -165,14 +243,17 @@ flowchart TB
 
 ### ① 建卡：raw → cards
 
-**代码**：`importFromWiki()`（v2.mjs，约 L586）→ `normalizeCards()` → `grade()`
-**输入**：经历标题、类型、`raw_text`（`raw/*.json` 的 messages 拼接）
-**输出**：`{ spine_summary, story_cards[] }`，每卡 6 槽位；随后静态规则分级：
-- S：problem/workflow/outcome 三槽位齐全 + outcome 含数字
-- A：三槽位齐全 / 两槽位且有动作或数字
-- B：其余
-**校验**：槽位缺信息必须填「未提及」；`raw_quote` 必须来自原话；卡片必须 `is_verified=true`。
-**提示词**：
+**代码**：`importFromWiki()` → `normalizeCards()` → `grade()`
+**输入**：经历标题/类型 + `raw_text`（raw/*.json 的 messages 拼接）
+**输出**：`{ spine_summary, story_cards[] }`，每卡 6 槽位；静态分级：
+
+| 等级 | 规则 |
+| --- | --- |
+| S | problem/workflow/outcome 三槽齐全 且 outcome 含数字 |
+| A | 三槽齐全；或两槽且有动作/数字 |
+| B | 其余 |
+
+**校验**：缺信息槽位必须写“未提及”；`raw_quote` 必须来自原话；`is_verified=true`。
 
 ```text
 const PROMPT_INGEST = `# Role
@@ -205,20 +286,32 @@ const PROMPT_INGEST = `# Role
 
 ---
 
-### ② 扫描：JD + 卡片 → 选卡/策略
+### ② 扫描：JD + 卡片 → 选卡 / 策略 / 缺口
 
-**代码**：`scan(jd)`（约 L612）
-**输入**：`{ jd, experiences[{exp_id, category, title, spine_summary, cards[{card_id, step_order, quality_grade, slot_problem, slot_workflow, slot_outcome}]}] }`
+**代码**：`scan(jd)`
+**输入**：
+```json
+{
+  "jd": "...",
+  "experiences": [{
+    "exp_id": "", "category": "", "title": "", "spine_summary": "",
+    "cards": [{ "card_id": "", "step_order": 1, "quality_grade": "S",
+                "slot_problem": "", "slot_workflow": "", "slot_outcome": "" }]
+  }]
+}
+```
 **输出**：
 ```json
 {
   "jd_analysis": { "core_demands": [], "jd_focus": "", "hook_level": "L1|L2|L3", "body_pattern": "XYZ|CAR|PAR", "reason": "" },
-  "experience_rankings": [{ "exp_id": "", "priority_rank": 1, "decision": "主推详写|补充略写|建议舍弃",
-    "selected_cards": [{ "card_id": "", "step_order": 1, "match_reason": "" }], "gaps": [] }]
+  "experience_rankings": [{
+    "exp_id": "", "priority_rank": 1, "decision": "主推详写|补充略写|建议舍弃",
+    "selected_cards": [{ "card_id": "", "step_order": 1, "match_reason": "" }],
+    "gaps": []
+  }]
 }
 ```
-**校验**：代码只依赖 JSON 解析成功；字段与引用由测试闸门保证（`npm test` 会校验 jd_analysis 字段、rankings 覆盖、card_id 合法）。`selected_cards` 为空则后续 compose 跳过该段。
-**提示词**：
+**校验**：代码层只保证 JSON 可解析；字段完整性、rankings 覆盖、card_id 合法由 `npm test` 断言。`selected_cards` 为空则 compose 跳过该段。
 
 ```text
 const PROMPT_SCAN = `# Role
@@ -263,17 +356,16 @@ const PROMPT_SCAN = `# Role
 
 ---
 
-### ③ 编译：单段经历 → 三区内容
+### ③ 编译：单段经历 → 三区内容（背景 + Hook + 正文）
 
-**代码**：`compose(runId, selections)`（约 L304）
+**代码**：`compose(runId, selections)`
 **输入**（每段）：
-- 经历 `title/category/spine_summary`
-- 用户选中的卡片（按 step_order 排序，带 6 槽位）
-- 扫描阶段给这些卡片的 `match_reason`（编译时做单点聚焦）
-- 策略：`{ jd_focus, hook_level, body_pattern }`（来自 `scan.jd_analysis`，可被 selections 覆盖）
+- 经历 `title / category / spine_summary`
+- 选中卡片（按 step_order，带 6 槽位）
+- 这些卡片的 `match_reason`（单点聚焦）
+- `strategy = { jd_focus, hook_level, body_pattern }`
 
 **输出**：
-
 ```json
 {
   "exp_id": "",
@@ -281,37 +373,24 @@ const PROMPT_SCAN = `# Role
   "bullets": [{ "card_id": "", "focus_angle": "≤15字", "hook": "4-12字符", "content": "35-80字" }]
 }
 ```
+**程序后处理**：剥离开头 `【hook】` 或裸 hook；生成 `checks`（长度、eval_end、hook_repeated、banned、focus）。
 
-**质量闸门（代码硬校验 + 归一化）**：
+**质量闸门**见第 6 节；**归一化提示词**：
 
-```mermaid
-flowchart TD
-  A[LLM compile 输出] --> B{每卡恰好 1 bullet<br/>card_id 合法?}
-  B -->|否| ERR[该段记录 error，不阻塞其他段]
-  B -->|是| C{project_background<br/>40-60 且以。或；结尾?}
-  C -->|否| FIX[PROMPT_FIT 改写]
-  C -->|是| D
-  FIX --> D{content 35-80<br/>hook 4-12?}
-  D -->|否| FIX
-  D -->|是| E{反八股?<br/>无评价收尾/无重复hook}
-  E -->|否| FIX
-  E -->|是| OK[写入 run.content]
-  FIX -->|3 轮后仍不合规| TRIM[hardTrim 分句裁剪<br/>记录 hard_trimmed]
-  TRIM --> OK
+```text
+const PROMPT_FIT = `# Role
+你是简历字数与风格归一化器。严格不新增事实、不删关键数字/工具/结果，保持原 hook 与叙事骨架。
+
+# Rules
+1. project_background 目标 40-60 字，必须是完整句子（以。或；结尾），不得截断成病句。
+2. 每条 bullet 的 content 目标 50-75 字、可接受 35-80 字（含标点）；>80 必须删到 ≤80；<35 可适度补充。
+3. 只围绕 focus_angle 的一个抓手，删修饰、合并从句；允许只保留 2~3 个要素，不得只做同义替换。
+4. 若结尾是评价性表述（体现了…能力 / 展现了… / 验证了… / 确保了… / 保障了…），改成事实、数字或交付物收尾。
+5. content 中不要重复 hook、不要带【】前缀；不改 hook、不改 card_id。
+6. 只返回 JSON：{ "project_background": "...", "bullets": [ { "card_id": "...", "content": "..." } ] }`;
 ```
 
-**具体规则**（`checkBullet`）：
-| 检查 | 规则 | 不合规处理 |
-| --- | --- | --- |
-| hook 长度 | 4-12 字符 | 进入 FIT |
-| content 长度 | 35-80（舒适 50-75） | 进入 FIT，仍超则 hardTrim |
-| 背景 | 40-60 且完整句 | 进入 FIT，仍不合规则 hardTrim |
-| 评价收尾 | 禁止「体现/展现/验证/确保/保障 + 能力/效果/质量」 | 进入 FIT |
-| 重复 hook | content 不得以 hook 或【…】开头 | 程序先剥离，再不行进 FIT |
-| 溯源 | `raw_quote` 必须来自卡片 | 空则测试失败 |
-| focus | `focus_angle` 非空 | 空则测试失败 |
-
-**提示词（模板，`{jd_focus}/{hook_level}/{body_pattern}` 由策略注入）**：
+**编译提示词**（`{jd_focus}/{hook_level}/{body_pattern}` 由策略注入）：
 
 ```text
 const PROMPT_COMPILE = (p) => `# Role
@@ -404,33 +483,14 @@ const PROMPT_COMPILE = (p) => `# Role
 }`;
 ```
 
-**归一化提示词**：
-
-```text
-const PROMPT_FIT = `# Role
-你是简历字数与风格归一化器。严格不新增事实、不删关键数字/工具/结果，保持原 hook 与叙事骨架。
-
-# Rules
-1. project_background 目标 40-60 字，必须是完整句子（以。或；结尾），不得截断成病句。
-2. 每条 bullet 的 content 目标 50-75 字、可接受 35-80 字（含标点）；>80 必须删到 ≤80；<35 可适度补充。
-3. 只围绕 focus_angle 的一个抓手，删修饰、合并从句；允许只保留 2~3 个要素，不得只做同义替换。
-4. 若结尾是评价性表述（体现了…能力 / 展现了… / 验证了… / 确保了… / 保障了…），改成事实、数字或交付物收尾。
-5. content 中不要重复 hook、不要带【】前缀；不改 hook、不改 card_id。
-6. 只返回 JSON：{ "project_background": "...", "bullets": [ { "card_id": "...", "content": "..." } ] }`;
-```
-
 ---
 
 ### ④ 评论：生成「值得补的方向」
 
-**代码**：`comments(runId)`（约 L370）
-**输入**：`{ jd, gaps, unselected_cards(最多 20 张 S/A), bullets }`
+**代码**：`comments(runId)`
+**输入**：`{ jd, gaps, unselected_cards（最多 20 张 S/A）, bullets }`
 **输出**：`{ comments: [{ bullet_id, exp_id, question, reason, card_ids }] }`
-**校验**：
-- 只能锚定本次已生成的 bullet（非法锚点直接丢弃）；
-- 最多 4 条；
-- 模型调用失败时用 `gaps` 兜底生成 3 条。
-**提示词**：
+**校验**：只允许锚定本次已生成的 bullet（否则丢弃）；最多 4 条；模型失败时用 gaps 兜底 3 条。
 
 ```text
 const PROMPT_COMMENTS = `# Role
@@ -448,14 +508,13 @@ const PROMPT_COMMENTS = `# Role
 
 ---
 
-### ⑤ 补卡：回答 → 新卡 → 重编译
+### ⑤ 补卡：回答 → 新卡 → 只重编译该段
 
-**代码**：`gapCard(runId,{comment_id,answer})`（约 L388）
-**输入**：该经历 `raw_text` + 缺口问题 + 用户回答
+**代码**：`gapCard(runId, {comment_id, answer})`
+**输入**：该经历 `raw_text`（缺失回退 `exp.raw_text`）+ 缺口问题 + 用户回答
 **输出**：
-- 回答不足：`{ insufficient: true, question }` → 前端/CLI 显示追问，**不改库**；
-- 回答足够：`{ card, run }` → 追加到 `cards.json`（`source=gap`，重新 `grade()`），然后 **只重编译该经历**（保留原有选卡 + 新卡），并把评论标记 `resolved=true / new_card_id`。
-**提示词**：
+- 不足：`{ insufficient: true, question }` → 追问，**不改库**；
+- 足够：`{ card, run }` → 新卡（`source=gap`、重新分级）写入 `cards.json`；只重编译该经历（原选卡 + 新卡）；评论 `resolved=true / new_card_id`。
 
 ```text
 const PROMPT_GAPCARD = `# Role
@@ -470,101 +529,120 @@ const PROMPT_GAPCARD = `# Role
 
 ---
 
-## 6. run 状态机
+## 6. 编译质量闸门
+
+![质量闸门图](images/04-quality-gates.png)
+
+<details><summary>Mermaid 源码（可编辑）</summary>
+
+```mermaid
+flowchart TB
+  A["LLM 编译输出"] --> B{"每卡 1 bullet<br/>card_id 合法？"}
+  B -->|否| ERR["该段记录 error"]
+  B -->|是| C{"背景 40-60 字<br/>完整句？"}
+  C -->|否| FIX["PROMPT_FIT 改写"]
+  C -->|是| D{"正文 35-80 字<br/>Hook 4-12 字符？"}
+  D -->|否| FIX
+  D -->|是| E{"反八股通过？"}
+  E -->|否| FIX
+  E -->|是| OK["写入 run.content"]
+  FIX -->|3 轮后仍不合规| TRIM["hardTrim 兜底"]
+  TRIM --> OK
+```
+
+</details>
+
+| 检查 | 规则 | 不合规处理 |
+| --- | --- | --- |
+| 1 卡 1 bullet | `card_id` 合法、无重复 | 该段记 error |
+| 背景 | 40-60 字，以。或；结尾 | PROMPT_FIT |
+| 正文 | 35-80 字（舒适 50-75） | PROMPT_FIT，仍超则 hardTrim |
+| Hook | 4-12 字符 | 计入 checks；测试断言 |
+| 反八股 | 禁“体现/展现/验证/确保/保障 + 能力/效果/质量”收尾；content 不以 hook/【开头 | PROMPT_FIT + 程序剥离 |
+| 溯源 | `raw_quote` 非空且来自卡片 | 测试失败 |
+| 聚焦 | `focus_angle` 非空 | 测试失败 |
+
+---
+
+## 7. run 状态机
+
+![run 状态机](images/05-run-states.png)
+
+<details><summary>Mermaid 源码（可编辑）</summary>
 
 ```mermaid
 stateDiagram-v2
-  [*] --> scanned: scan(jd)
-  scanned --> composed: compose(selections)
-  composed --> commented: comments()
-  commented --> gap_resolved: gap(answer 足够)
-  gap_resolved --> commented: 该段重编译后仍保留评论
-  commented --> commented: 回答不足（insufficient，不落库）
-  composed --> composed: 改选卡重新 compose
+  [*] --> scanned
+  scanned --> composed
+  composed --> commented
+  commented --> gap_resolved
+  gap_resolved --> commented
+  commented --> commented: 回答不足
+  composed --> composed: 改选卡重编
 ```
 
-对应 `v2/runs/<run_id>.json` 的字段：
+</details>
 
-| 状态 | 存在字段 |
+| 状态 | run 中存在的字段 |
 | --- | --- |
 | scanned | `scan` |
-| composed | `selections`, `content` |
+| composed | `selections` + `content` |
 | commented | `comments` |
 | gap_resolved | `comments[].resolved/new_card_id` + `cards.json` 新卡 |
 
 ---
 
-## 7. 入口：CLI / API / 测试
-
-### CLI（推荐，直接看每阶段输出）
+## 8. 入口与测试
 
 ```bash
-# 建卡（需要 raw + snapshots）
+# CLI（每阶段单独跑，输出 JSON）
+node prototype/cli.mjs state
 node prototype/cli.mjs import
-
-# 扫描
 node prototype/cli.mjs scan --jd-file 回归集/jd-01-市场部实习生.md
-
-# 按扫描推荐自动选卡编译
 node prototype/cli.mjs compose --run v2run_xxx
-
-# 评论 / 补卡 / 校验 / 一键跑通
 node prototype/cli.mjs comments --run v2run_xxx
-node prototype/cli.mjs gap --run v2run_xxx --comment cm_1 --answer "补充口径：..."
+node prototype/cli.mjs gap --run v2run_xxx --comment cm_1 --answer "..."
 node prototype/cli.mjs check --run v2run_xxx
 node prototype/cli.mjs pipeline --jd-file 回归集/jd-01-市场部实习生.md
+
+# 离线（不花钱）
+DEEPSEEK_MOCK=1 node prototype/cli.mjs pipeline --jd-file ...
+
+# 只启 JSON API（无前端）
+node prototype/serve.mjs   # /health, /api/v2/*
 ```
 
-- 环境变量：`WORKBENCH_DATA_DIR`（数据目录）、`DEEPSEEK_MOCK=1`（离线、不花钱、确定性输出）；
-- `check` 是发布前的最后一道闸：字数、Hook、背景、评价收尾、重复 hook、溯源、focus。
-
-### 精简 API（无前端）
-
-```bash
-node prototype/serve.mjs
-# GET  /health
-# GET  /api/v2/state
-# POST /api/v2/import | scan | compose | comments | gap
-# GET  /api/v2/graph | run?id=
-# 其余路径 404（前端已删除）
-```
-
-### 测试
-
-```bash
-npm test                 # pipeline-mock + data-deps，离线 8/8
-npm run test:live        # 真实模型冒烟（LIVE=1）
-```
-
-| 测试 | 验证内容 |
+| 测试 | 验证 |
 | --- | --- |
-| `pipeline-mock.test.mjs` | 扫描结构/引用、编译 1卡1bullet/字数/Hook/溯源/反八股、评论锚点、补卡 resolved、图谱一致性 |
-| `data-deps.test.mjs` | 数据目录结构、卡片分级与引用、当前版本 run 的引用一致性（stale run 跳过） |
-| `live-e2e.mjs` | 真实模型跑 scan→compose→comments，断言质量闸门 |
+| `pipeline-mock.test.mjs` | 扫描结构/引用、编译闸门、评论锚点、补卡 resolved、图谱一致性 |
+| `data-deps.test.mjs` | 数据目录结构、卡片分级/引用、当前版本 run 的引用（stale 跳过） |
+| `live-e2e.mjs` | 真实模型 scan→compose→comments 冒烟 |
+
+当前状态：`npm test` 8/8；live 冒烟通过（7 经历 / 26 卡 → 12 bullets / 4 评论）。
 
 ---
 
-## 8. 已知边界（下一步要打的点）
+## 9. 已知边界
 
-1. **扫描没有程序级 schema 校验**：目前只保证 JSON 可解析，字段/覆盖率靠测试与提示词；建议在 `scan()` 里加一层 `assertScan()`。
-2. **编译的兜底会丢细节**：`hardTrim` 仍可能裁掉次要动作；需要统计触发率并针对高频卡片改提示词。
-3. **补卡只做一轮**：回答不足时只给追问，没有多轮闭环。
-4. **评论主题可能重复**：历史累积后会出现相近问题，需要去重。
-5. **跨 JD 稳定性**：需要用不同岗位 JD 验证 `hook_level/body_pattern` 是否真按岗位选择，而不是固定输出。
-6. **Mock 与真实模型的行为差异**：mock 只验证链路契约，不验证语言质量。
+1. 扫描缺程序级 schema 校验（只有测试断言），建议在 `scan()` 加 `assertScan()`；
+2. `hardTrim` 兜底仍可能裁掉次要动作，需要统计触发率；
+3. 补卡只做一轮，没有多轮追问闭环；
+4. 评论主题可能重复，需要去重；
+5. `hook_level/body_pattern` 需要跨 JD 验证是否真按岗位选择；
+6. mock 只验证契约，不验证语言质量。
 
 ---
 
-## 9. 文件索引
+## 10. 文件索引
 
 | 文件 | 说明 |
 | --- | --- |
-| `prototype/v2.mjs` | 核心链路与全部提示词 |
+| `prototype/v2.mjs` | 核心链路 + 全部提示词 |
 | `prototype/cli.mjs` | 阶段命令入口 |
-| `prototype/serve.mjs` | 精简 JSON API |
+| `prototype/serve.mjs` | 精简 JSON API（无静态页） |
 | `prototype/mock.mjs` | 离线确定性模型替身 |
-| `prototype/workbench.mjs` | 经历库/快照/raw 读取（建卡依赖） |
+| `prototype/workbench.mjs` | 经历库/快照/raw 读取 |
 | `prototype/llm.mjs` | 模型连接配置（旧 Wiki 任务保留） |
 | `prototype/docs/DATA-CONTRACT.md` | 数据契约 |
 | `prototype/docs/MODEL-PIPELINE.md` | 阶段参数速查 |
-| `prototype/tests/` | 契约测试 / 数据依赖 / live 冒烟 |
+| `prototype/tests/` | 契约 / 数据依赖 / live 冒烟 |
