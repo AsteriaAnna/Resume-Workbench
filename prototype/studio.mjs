@@ -24,12 +24,16 @@ export const saveResume=(input,expected)=>serial(async()=>{
   const id=input.id||uid('resume'),old=await getResume(id);
   if(old&&expected!==old.revision)throw Object.assign(Error('此简历已被其他操作更新，请重新打开后合并修改。'),{status:409});
   if(typeof input.markdown!=='string'||input.markdown.length>200000)throw Error('正文格式不正确');
+  const semantic=v=>JSON.stringify(Object.fromEntries(Object.entries(v).filter(([k])=>!['revision','created_at','updated_at'].includes(k)).sort(([a],[b])=>a.localeCompare(b))));
+  if(old&&semantic({...old,...input})===semantic(old))return old;
   const now=new Date().toISOString();
   const next={...old,...input,id,name:String(input.name||'未命名简历').slice(0,100),revision:(old?.revision||0)+1,created_at:old?.created_at||now,updated_at:now};
   if(old)await write(path.join(dir,'history',id,`${old.revision}.json`),old);
   await write(resumeFile(id),next);return next;
 });
-export async function migrate(){
+let migrationLock=Promise.resolve();
+export function migrate(){const next=migrationLock.then(migrateOnce);migrationLock=next.catch(()=>{});return next;}
+async function migrateOnce(){
   const report=await read(path.join(dir,'migration.json'),{version:1,resumes:[],answers:[]});
   for(const old of await read(path.join(root,'resumes.json'),[])){
     const key=String(old.id);if(report.resumes.includes(key))continue;
@@ -97,6 +101,7 @@ export async function execute(action,input,model=call){
     validateOutline(input.outline,m);
     const outline=structuredClone(input.outline);outline.sections.forEach(s=>s.items=s.items.filter(i=>i.enabled!==false));outline.sections=outline.sections.filter(s=>s.items.length);
     const draft=await model('studio_compose',{jd:input.jd,outline,material:m});
+    if(claimIssues(draft,m).length){const traced=await model('studio_trace',{draft,sources:m.sources});if(!Array.isArray(traced.claims))throw Error('事实标注返回格式不完整');draft.claims=traced.claims;}
     const verification=await model('studio_verify',{jd:input.jd,draft,sources:m.sources});
     if(!Array.isArray(verification.issues))throw Error('核验返回格式不完整');
     const issues=[...claimIssues(draft,m),...verification.issues];return {draft,issues,ok:!issues.some(i=>i.severity==='block'),material_revision:m.revision,profile_revision:m.profile_revision};
@@ -107,7 +112,9 @@ export async function execute(action,input,model=call){
   }
   if(action==='answer'){
     if(!input.answer?.trim())throw Error('请先填写补充');
-    if(!input.supplement_saved)await updateWiki({experience_id:input.comment.node_id,message:input.answer},model);
+    if(!m.experiences.some(e=>e.id===input.comment?.node_id))throw Error('请选择补充所属的经历');
+    const receipt=path.join(dir,'answers',crypto.createHash('sha256').update(input.comment.node_id+'\n'+input.answer.trim()).digest('hex')+'.json');
+    if(!await read(receipt,null)){await updateWiki({experience_id:input.comment.node_id,message:input.answer},model);await write(receipt,{saved_at:new Date().toISOString()});}
     const updated=await materials();
     const patch=await model('studio_patch',{jd:input.jd,markdown:input.markdown,comment:input.comment,answer:input.answer,material:updated});
     if(patch.quote!==input.comment.quote||!input.markdown.includes(patch.quote)||!patch.replacement)throw Error('建议无法对应原句；补充已保存到经历库');
@@ -131,6 +138,8 @@ export async function startJob(action,input,model=call){
 export async function jobFor(id){const j=jobs.get(safe(id))||await read(path.join(dir,'jobs',id+'.json'),null);if(!j)throw Error('任务不存在');if(j.status==='running'&&!jobs.has(id))return {...j,status:'interrupted',error:'服务已重启，可以重新执行此任务'};return j;}
 export async function studioRoute(req,res,url,{body,send}){
   const p=url.pathname;
+  if(p==='/api/studio/folders'&&req.method==='GET')return send(res,200,{folders:await read(path.join(dir,'folders.json'),[])});
+  if(p==='/api/studio/folders'&&req.method==='POST'){const v=await body(req);if(!Array.isArray(v.folders)||v.folders.some(f=>typeof f!=='string'||f.length>100))throw Error('文件夹格式错误');await write(path.join(dir,'folders.json'),[...new Set(v.folders)]);return send(res,200,{ok:true});}
   if(p==='/api/studio/graph'&&req.method==='GET')return send(res,200,await graph());
   if(p==='/api/studio/resumes'&&req.method==='GET'){await migrate();return send(res,200,{items:await listResumes()});}
   if(p==='/api/studio/resume'&&req.method==='POST'){const v=await body(req);return send(res,200,await saveResume(v.resume,v.expected_revision));}

@@ -19,6 +19,7 @@ test('unified sources, version conflicts, migration, proposals and persistent jo
  await assert.rejects(()=>wiki.updateWiki({experience_id:e.experience_id,message:'无关的网络观点'},mock));
  let m=await studio.materials();assert.equal(m.experiences.length,1);assert.ok(m.sources.some(s=>s.text.includes('部署由同学')));assert.ok(!m.sources.some(s=>s.text.includes('无关')));
  const r=await studio.saveResume({name:'测试',markdown:'旧稿',jd:'技术岗位'});
+ assert.equal((await studio.saveResume(r,r.revision)).revision,r.revision);
  const r2=await studio.saveResume({...r,markdown:'修改稿'},r.revision);assert.equal(r2.revision,2);
  await assert.rejects(()=>studio.saveResume({...r,markdown:'过期修改'},r.revision),/其他操作/);
  const old=JSON.parse(await fs.readFile(path.join(folder,'studio','history',r.id,'1.json'),'utf8'));assert.equal(old.markdown,'旧稿');
@@ -37,6 +38,14 @@ test('unified sources, version conflicts, migration, proposals and persistent jo
  await fs.mkdir(path.join(folder,'v2','runs'),{recursive:true});await fs.writeFile(path.join(folder,'v2','runs','one.json'),JSON.stringify({comments:[{exp_id:e.experience_id,answer:'我还做了40条样本回归。'}]}));
  await studio.migrate();const rev=(await wiki.state()).revision;await studio.migrate();assert.equal((await wiki.state()).revision,rev);
  m=await studio.materials();assert.ok(m.sources.some(s=>s.text.includes('40条样本')));
+ const comment={id:'retry-test',node_id:e.experience_id,quote:'旧句'};
+ const failing=async(task,input)=>{if(task==='studio_patch')throw Error('patch failed');return mock(task,input);};
+ await assert.rejects(()=>studio.execute('answer',{comment,answer:'补充：我负责接口错误提示。',markdown:'旧句'},failing),/patch failed/);
+ const afterAnswer=(await wiki.state()).revision;
+ await assert.rejects(()=>studio.execute('answer',{comment,answer:'补充：我负责接口错误提示。',markdown:'旧句'},failing),/patch failed/);
+ assert.equal((await wiki.state()).revision,afterAnswer);
+ await wiki.archiveWiki({node_id:e.experience_id});assert.equal((await studio.materials()).experiences.length,0);
+ await wiki.archiveWiki({node_id:e.experience_id,restore:true});assert.equal((await studio.materials()).experiences.length,1);
  const g=await studio.graph();assert.ok(g.nodes.some(n=>n.id==='profile_local'));assert.ok(g.links.some(l=>l.target===e.experience_id));
  }finally{await fs.rm(folder,{recursive:true,force:true});}
 });

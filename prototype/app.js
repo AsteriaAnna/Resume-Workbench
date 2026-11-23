@@ -15,6 +15,7 @@ const S = {
   resumes: [], opened: [], activeResume: null, folder: '全部简历', folders: ['我的简历', '实习申请'],
   side: 'gen', formatTab: '排版设置', graphMode: 'atlas', graphRotate: false, graphLabels: true, wikiChat: {}, wikiChatLoaded: new Set(),
 };
+const wikiDrafts=new Map();
 const selectedExperience = () => { const n = S.nodes[S.activeDoc]; return n?.kind === 'experience' ? n.id : ['story', 'fragment'].includes(n?.kind) ? n.experience_id : null; };
 const current = () => S.resumes.find((r) => r.id === S.activeResume);
 const experienceTypeNames = { internship: '公司实习', work: '正式工作', project: '独立项目', campus: '校园经历', volunteer: '志愿活动', other: '其他／待确认' };
@@ -29,7 +30,7 @@ async function init() {
 function bind() {
   document.addEventListener('click', onClick);
   document.addEventListener('input', (e) => {
-    if (e.target.id === 'doc-editor') { const n = S.nodes[S.activeDoc]; if (n) n.text = e.target.value; }
+    if (e.target.id === 'doc-editor') { const n = S.nodes[S.activeDoc]; if (n) {n.text = e.target.value;wikiDrafts.set(n.id||'profile',n.text);} }
     studio.input(e);
   });
   document.addEventListener('change', e=>{if(e.target.id==='node-jump'){selectDoc(e.target.value);return;}if(e.target.id==='experience-type')setType(e.target.value);else studio.input(e);});
@@ -66,7 +67,7 @@ async function loadWiki(openId) {
     for (const n of data.index.nodes) {
       if (n.status !== 'active') continue;
       const doc = (data.documents || []).find((d) => d.id === n.id);
-      S.nodes.push({ id: n.id, experience_id: n.experience_id, experience_type: n.experience_type, kind: n.kind, title: n.title, type: n.kind === 'topic' ? 0 : ['story', 'fragment'].includes(n.kind) ? 2 : 1, text: doc?.markdown || n.summary });
+      S.nodes.push({ id: n.id, experience_id: n.experience_id, experience_type: n.experience_type, kind: n.kind, title: n.title, type: n.kind === 'topic' ? 0 : ['story', 'fragment'].includes(n.kind) ? 2 : 1, text: wikiDrafts.get(n.id) ?? doc?.markdown ?? n.summary });
     }
     const idx = (id) => S.nodes.findIndex((n) => n.id === id);
     S.docTabs = [1, ...openIds.map(idx).filter((i) => i > 1)];
@@ -76,7 +77,7 @@ async function loadWiki(openId) {
   } catch (e) { toast('经历库读取失败：' + e.message); }
 }
 async function loadProfile() {
-  try { const p = await getJson('/api/profile'); if (p.markdown) S.nodes[1].text = p.markdown; } catch {}
+  try { const p = await getJson('/api/profile'); if (p.markdown) S.nodes[1].text = wikiDrafts.get('profile') ?? p.markdown; } catch {}
 }
 function renderWiki() {
   $('#app').innerHTML = `<div class="wiki">
@@ -123,8 +124,7 @@ function refreshWikiChat() {
   el.innerHTML = wikiChatHtml();
   el.scrollTop = el.scrollHeight;
 }
-function addWikiChat(role, payload) {
-  const key = wikiChatKey();
+function addWikiChat(role, payload, key = wikiChatKey()) {
   (S.wikiChat[key] ||= []).push(role === 'you' ? { role, text: payload } : { role, html: payload });
   refreshWikiChat();
 }
@@ -149,25 +149,27 @@ function setType(value) { const id = selectedExperience(); if (!id) return; post
 async function saveDoc() {
   const n = S.nodes[S.activeDoc]; if (!n) return;
   try {
-    if (S.activeDoc === 1) { await postJson('/api/profile', { markdown: n.text }); toast('基础信息已保存'); return; }
+    if (S.activeDoc === 1) { await postJson('/api/profile', { markdown: n.text }); wikiDrafts.delete('profile');toast('基础信息已保存'); return; }
     if (n.kind === 'experience' || ['story', 'fragment'].includes(n.kind)) {
       if (n.kind === 'experience') await postJson('/api/wiki/edit', { experience_id: n.id, markdown: n.text });
       else await postJson('/api/wiki/edit', { experience_id: n.experience_id, node_id: n.id, markdown: n.text });
-      toast('已保存并生成新版本'); await loadWiki(n.id);
+      wikiDrafts.delete(n.id);toast('已保存并生成新版本'); await loadWiki(n.id);
     } else toast('该节点由经历索引自动生成');
   } catch (e) { toast('保存失败：' + e.message); }
 }
 async function wikiSend() {
   const text = ($('#wiki-input')?.value || '').trim(); if (!text) return toast('先输入内容');
-  const exp = selectedExperience();
-  addWikiChat('you', text);
+  if(S.wikiBusy)return toast('正在整理上一条补充');
+  S.wikiBusy=true;
+  const exp = selectedExperience(),chatKey=wikiChatKey();
+  addWikiChat('you', text,chatKey);
   $('#wiki-input').value = '';
   try {
     if(S.activeDoc===1){const n=S.nodes[1];n.text=(n.text.includes('在这里记录姓名')?'# 基础信息':n.text)+'\n\n'+text;await postJson('/api/profile',{markdown:n.text});addWikiChat('ai','已保存到基础信息。');refreshWikiDoc();return;}
     if (exp) {
       const r = await postJson('/api/wiki/input', { experience_id: exp, message: text });
       const qs = (r.questions || []).map((q) => `<li>${esc(q.question || q)}</li>`).join('');
-      addWikiChat('ai', `已整理进经历（第 ${r.revision} 版）。${qs ? '<br>建议继续补充：<ul>' + qs + '</ul>' : ''}`);
+      addWikiChat('ai', `已整理进经历（第 ${r.revision} 版）。${qs ? '<br>建议继续补充：<ul>' + qs + '</ul>' : ''}`,chatKey);
       await loadWiki(exp);
     } else {
       const r = await postJson('/api/wiki/create', { message: text });
@@ -175,7 +177,7 @@ async function wikiSend() {
       await loadWiki(r.experience_id);
       loadWikiChat(r.experience_id);
     }
-  } catch (e) { if($('#wiki-input'))$('#wiki-input').value=text;addWikiChat('ai', '失败：' + esc(e.message)+'；输入已保留，可重试。'); }
+  } catch (e) { if($('#wiki-input'))$('#wiki-input').value=text;addWikiChat('ai', '失败：' + esc(e.message)+'；输入已保留，可重试。',chatKey); } finally {S.wikiBusy=false;}
 }
 async function wikiAsk() {
   const exp = selectedExperience(); if (!exp) return toast('先在图谱里选一段经历');

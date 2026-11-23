@@ -11,3 +11,6 @@ playwright-report/
 prototype/.test-data/
 prototype/*.png
 
+
+prototype/.test-data*/
+.real-check.mjs
