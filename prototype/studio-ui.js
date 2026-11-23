@@ -37,7 +37,7 @@ export function createStudio({S,$,esc,toast,getJson,postJson,render,loadWiki,loa
       if(j.status==='running'){const e=$('.task-progress');if(current()?.id===r.id&&e)e.firstChild.textContent=r.job_stage;await new Promise(resolve=>setTimeout(resolve,1000));continue;}
       r.job_done=true;r.last_job=id;
       if(j.status==='complete'){
-        const x=j.result;if(j.action==='outline'||j.action==='revise'){r.outline=x.outline;r.material_revision=x.material_revision;}
+        const x=j.result;if(j.action==='outline'||j.action==='revise'){r.outline=x.outline;r.run_id=x.run_id;r.material_revision=x.material_revision;}
         if(j.action==='compose')r.proposal={...x,kind:'draft',base_markdown:j.input.base_markdown??j.input.markdown??''};
         if(j.action==='comments')r.comments=x.comments;
         if(j.action==='answer'){r.proposal={...x,kind:'patch'};const c=r.comments.find(c=>c.id===j.input.comment.id);if(c)c.supplement_saved=true;await loadWiki();}
@@ -45,7 +45,7 @@ export function createStudio({S,$,esc,toast,getJson,postJson,render,loadWiki,loa
       }else toast(j.error||'任务已停止');
       await persist(r);if(current()?.id===r.id&&S.screen==='editor')render();break;
     }}catch(e){toast(e.message);}finally{polling.delete(id);}}
-  async function run(action,extra={}){const r=current();if(!r)return;if(r.job_id&&!r.job_done)return toast('当前任务尚未完成');await flush();const input={jd:r.jd,outline:r.outline,markdown:r.markdown,base_markdown:r.markdown,...extra};const j=await postJson('/api/studio/job',{action,input});r.job_id=j.id;r.job_done=false;r.job_stage='准备材料';await persist(r);render();poll(r,j.id);}
+  async function run(action,extra={}){const r=current();if(!r)return;if(r.job_id&&!r.job_done)return toast('当前任务尚未完成');await flush();const input={jd:r.jd,run_id:r.run_id,outline:r.outline,markdown:r.markdown,base_markdown:r.markdown,...extra};const j=await postJson('/api/studio/job',{action,input});r.job_id=j.id;r.job_done=false;r.job_stage='准备材料';await persist(r);render();poll(r,j.id);}
   function input(e){const r=current();if(!r)return;const t=e.target;
     if(t.id==='resume-source')r.markdown=t.value;
     else if(t.id==='jd-input')r.jd=t.value;
@@ -72,7 +72,7 @@ export function createStudio({S,$,esc,toast,getJson,postJson,render,loadWiki,loa
       if(a==='save')return persist(r,true);
       if(a==='toggle-edit'){S.editMode=!S.editMode;render();}
       if(a?.startsWith('side-')){S.side=a.slice(5);render();}
-      if(a==='outline')return run('outline');
+      if(a==='outline'){r.run_id=null;return run('outline');}
       if(a==='revise')return run('revise',{comment:$('#outline-comment').value});
       if(a==='compose')return run('compose');
       if(a==='comments'){S.side='ai';return run('comments');}

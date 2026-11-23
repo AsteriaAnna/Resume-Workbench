@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import {state,profile,documentFor,editWiki,updateWiki} from './workbench.mjs';
+import {state,profile,documentFor,editWiki,updateWiki,generate,reviseOutline,compose as composeOriginal} from './workbench.mjs';
 import {call} from './llm.mjs';
 import {htmlToMarkdown,exportHtml} from './document.mjs';
 
@@ -95,16 +95,22 @@ export function claimIssues(draft,m){
 }
 export async function execute(action,input,model=call){
   const m=await materials();
-  if(action==='outline'){if(!input.jd?.trim())throw Error('请提供 JD');const outline=await model('studio_outline',{jd:input.jd,material:m});validateOutline(outline,m);return {outline,material_revision:m.revision,profile_revision:m.profile_revision};}
-  if(action==='revise'){const outline=await model('studio_revise',{jd:input.jd,outline:input.outline,comment:input.comment,material:m});validateOutline(outline,m);return {outline,material_revision:m.revision};}
+  if(action==='outline'){
+    if(!input.jd?.trim())throw Error('请提供 JD');
+    const run=await generate({jd:input.jd,mode:'index_fallback'},model);
+    return {outline:run.outline,run_id:run.id,strategy:run.strategy,query_plan:run.query_plan,discovery:run.discovery,evaluation:run.evaluation,selection:run.selection,material_revision:m.revision,profile_revision:m.profile_revision};
+  }
+  if(action==='revise'){
+    if(!input.run_id)throw Error('先生成岗位大纲');
+    const run=await reviseOutline({run_id:input.run_id,comment:input.comment},model);
+    return {outline:run.outline,run_id:run.id,strategy:run.strategy,material_revision:m.revision};
+  }
   if(action==='compose'){
+    if(!input.run_id)throw Error('先生成岗位大纲');
     validateOutline(input.outline,m);
-    const outline=structuredClone(input.outline);outline.sections.forEach(s=>s.items=s.items.filter(i=>i.enabled!==false));outline.sections=outline.sections.filter(s=>s.items.length);
-    const draft=await model('studio_compose',{jd:input.jd,outline,material:m});
-    if(claimIssues(draft,m).length){const traced=await model('studio_trace',{draft,sources:m.sources});if(!Array.isArray(traced.claims))throw Error('事实标注返回格式不完整');draft.claims=traced.claims;}
-    const verification=await model('studio_verify',{jd:input.jd,draft,sources:m.sources});
-    if(!Array.isArray(verification.issues))throw Error('核验返回格式不完整');
-    const issues=[...claimIssues(draft,m),...verification.issues];return {draft,issues,ok:!issues.some(i=>i.severity==='block'),material_revision:m.revision,profile_revision:m.profile_revision};
+    const run=await composeOriginal({run_id:input.run_id,outline:input.outline},model);
+    const issues=[...(run.validation?.issues||[]),...(run.validation?.comments||[])];
+    return {draft:run.content,issues,ok:run.validation?.ok===true,run_id:run.id,material_revision:run.revision,profile_revision:m.profile_revision};
   }
   if(action==='comments'){
     const r=await model('studio_comments',{jd:input.jd,markdown:input.markdown,material:m});if(!Array.isArray(r.comments))throw Error('评论格式不完整');

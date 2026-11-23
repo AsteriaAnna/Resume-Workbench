@@ -25,16 +25,24 @@ test('unified sources, version conflicts, migration, proposals and persistent jo
  const old=JSON.parse(await fs.readFile(path.join(folder,'studio','history',r.id,'1.json'),'utf8'));assert.equal(old.markdown,'旧稿');
  const outline={positioning:'技术项目候选人',sections:[{name:'项目经历',items:[{node_id:e.experience_id,title:'会议助手',story_ids:[],enabled:true}]}]};
  const model=async(task,input)=>{
-  if(task==='studio_outline'){assert.ok(input.material.sources.some(s=>s.text.includes('部署由同学')));return outline;}
-  if(task==='studio_compose'){const src=input.material.sources.find(s=>s.text.includes('Node.js'));return {markdown:'# 候选人\n## 项目经历\n- 开发Node.js接口并返回原话引用。',claims:[{sentence:'- 开发Node.js接口并返回原话引用。',source_ids:[src.id]}]};}
-  if(task==='studio_verify')return {issues:[]};
+  if(task==='strategy')return {main_strategy:'技术链路型',secondary_strategy:'问题解决型',target_keyword_depth:'L2',body_focus:'接口'};
+  if(task==='query_plan')return {requirements:[{id:'req_1',jd_quote:'应用工程',category:'技术',terms:['Node.js'],evidence_needs:['接口'],constraints:[]}]};
+  if(task==='evaluate')return {assessments:input.evidence.map(x=>({requirement_id:'req_1',node_id:x.node.id,relevance:'direct',contribution:'executed',evidence:'supported',decision:'use',quote:''}))};
+  if(task==='selection')return {items:input.evidence.filter(x=>x.node.kind==='experience').map(x=>({node_id:x.node.id,section:'项目经历',use:'重点展开',focus:'接口',story_ids:[],priority:1}))};
+  if(task==='outline')return {positioning:'技术项目候选人',sections:[{name:'项目经历',items:[{node_id:e.experience_id,title:'会议助手',story_ids:[],enabled:true}]}]};
+  if(task==='compose')return {markdown:'# 候选人\n## 项目经历\n- 开发Node.js接口并返回原话引用。',claims:[]};
+  if(task==='trace_claims')return {claims:input.lines.map(line=>({sentence:line,node_id:e.experience_id,source_ids:[m.sources.find(s=>s.text.includes('Node.js')).id]}))};
+  if(task==='verify')return {ok:true,issues:[]};
   throw Error(task);
  };
- assert.deepEqual((await studio.execute('outline',{jd:'应用工程'},model)).outline,outline);
- const draft=await studio.execute('compose',{jd:'应用工程',outline},model);assert.equal(draft.ok,true);assert.equal((await studio.getResume(r.id)).markdown,'修改稿');
+ const outlined=await studio.execute('outline',{jd:'应用工程'},model);
+ assert.equal(outlined.outline.sections[0].name,'项目经历');
+ assert.equal(outlined.query_plan.requirements[0].terms[0],'Node.js');
+ const draft=await studio.execute('compose',{jd:'应用工程',run_id:outlined.run_id,outline:outlined.outline},model);
+ assert.equal(draft.ok,true);assert.equal((await studio.getResume(r.id)).markdown,'修改稿');
  assert.ok(studio.claimIssues({markdown:'无依据句子',claims:[]},m).length);
  assert.throws(()=>studio.validateOutline({sections:[{name:'项目',items:[{node_id:'invented'}]}]},m));
- const j=await studio.startJob('outline',{jd:'产品岗位'},model);let result;for(let i=0;i<40;i++){result=await studio.jobFor(j.id);if(result.status==='complete')break;await new Promise(r=>setTimeout(r,15));}assert.equal(result.status,'complete');assert.equal(result.events[0].task,'studio_outline');
+ const j=await studio.startJob('outline',{jd:'产品岗位'},model);let result;for(let i=0;i<40;i++){result=await studio.jobFor(j.id);if(result.status==='complete')break;await new Promise(r=>setTimeout(r,15));}assert.equal(result.status,'complete');assert.equal(result.events[0].task,'strategy');
  await fs.mkdir(path.join(folder,'v2','runs'),{recursive:true});await fs.writeFile(path.join(folder,'v2','runs','one.json'),JSON.stringify({comments:[{exp_id:e.experience_id,answer:'我还做了40条样本回归。'}]}));
  await studio.migrate();const rev=(await wiki.state()).revision;await studio.migrate();assert.equal((await wiki.state()).revision,rev);
  m=await studio.materials();assert.ok(m.sources.some(s=>s.text.includes('40条样本')));
