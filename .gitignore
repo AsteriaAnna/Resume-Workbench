@@ -5,3 +5,7 @@ prototype/.local-github.json
 prototype/local-data/
 prototype/*.jpg
 
+
+prototype/eval/runtime/
+
+prototype/eval/reports/
