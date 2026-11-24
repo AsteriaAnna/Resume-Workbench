@@ -160,3 +160,28 @@ test('人工手改 Markdown 后再输入/确认，手改内容不被覆盖', asy
   assert.ok(second.model.stories.some((s) => s.title === '人工改过的标题'), '手改标题应保留');
   assert.ok(second.model.stories.length >= 2, '新 Story 应追加而不是重建');
 });
+
+test('第二次输入带 Fragment 时融合不崩溃（回归 norm 未定义）', async () => {
+  const { store } = await tempStore();
+  let call = 0;
+  const llm = await createLLM({ mock: true, mockCall: createMock({
+    'P1-extract': () => {
+      call++;
+      if (call === 1) return {
+        stories: [{ temp_id: 's1', parent_temp_id: null, order: 1, title: '第一版', summary: '', ownership: '', scope: '', slots: { stage: '阶段', module: '模块', problem: '未提及', workflow: '完成动作', tech_link: '未提及', outcome: '有结果' }, raw_quotes: ['第一段原话内容'], boundary_reason: '切分' }],
+        fragments: [], unassigned_details: [], questions: [],
+      };
+      return {
+        stories: [{ temp_id: 's2', parent_temp_id: null, order: 1, title: '第二版', summary: '', ownership: '', scope: '', slots: { stage: '阶段', module: '模块', problem: '未提及', workflow: '补充动作', tech_link: '未提及', outcome: '补充结果' }, raw_quotes: ['第二段原话内容'], boundary_reason: '切分' }],
+        fragments: [{ temp_id: 'f1', body: '新的素材片段', reason: '细节' }], unassigned_details: [], questions: [],
+      };
+    },
+  }) });
+  const exp = await pipeline.createExperience({ store, input: { type: 'project', name: 'fragment 回归' } });
+  await pipeline.addExperienceInput({ store, llm, experienceId: exp.experience_id, text: '第一段原话内容，完成动作，有结果。' });
+  await pipeline.confirmExperienceStories({ store, llm, experienceId: exp.experience_id, decisions: null });
+  await pipeline.addExperienceInput({ store, llm, experienceId: exp.experience_id, text: '第二段原话内容，补充动作，补充结果。' });
+  const second = await pipeline.confirmExperienceStories({ store, llm, experienceId: exp.experience_id, decisions: null });
+  assert.ok(second.model.stories.some((s) => s.title === '第二版'));
+  assert.ok(second.model.fragments.some((f) => f.body === '新的素材片段'));
+});

@@ -1,4 +1,4 @@
-import { AppError, assert, id, now, SLOT_KEYS, validateMarkdownModel } from './types.mjs';
+import { AppError, assert, id, now, norm, SLOT_KEYS, validateMarkdownModel } from './types.mjs';
 import { promptP1 } from './prompts.mjs';
 import { serializeMarkdown } from './markdown.mjs';
 
