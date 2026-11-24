@@ -73,20 +73,19 @@ export function detectResumeCandidates({ jd, library, coverage, evaluations = []
   return out;
 }
 
-export function validateQuestion(q, { library = [], existing = [] } = {}) {
+export function validateQuestion(q, { library = [], existing = [], corpus = '' } = {}) {
   assert(q && q.scope && QUESTION_BASES.includes(q.basis_type), 'QUESTION_INVALID', '问题 scope/basis_type 非法');
   assert(String(q.question ?? '').trim().length >= 5, 'QUESTION_INVALID', '问题文案过短');
   assert(String(q.basis_quote ?? '').trim().length > 0, 'QUESTION_INVALID', '问题缺少 basis_quote');
   assert(Array.isArray(q.missing) && q.missing.length > 0, 'QUESTION_INVALID', '问题缺少 missing');
   assert(q.target && (q.target.experience_id || q.target.story_id), 'QUESTION_INVALID', '问题缺少 target');
-  if (q.scope === 'experience' && q.target?.experience_id && library.length) {
+  if (q.target?.experience_id && library.length) {
     const exp = library.find((x) => x.experience_id === q.target.experience_id);
     assert(exp, 'QUESTION_INVALID', `target 经历不存在: ${q.target.experience_id}`);
     if (q.target.story_id) {
       const s = (exp.stories ?? []).find((x) => x.story_id === q.target.story_id);
       assert(s, 'QUESTION_INVALID', `target Story 不存在: ${q.target.story_id}`);
-      const raw = exp.markdown || '';
-      assert(quoteMatch(raw, q.basis_quote).pass, 'QUESTION_INVALID', `basis_quote 不在 Story 正文中: ${q.basis_quote}`);
+      if (q.scope === 'experience' && corpus) assert(quoteMatch(corpus, q.basis_quote).pass, 'QUESTION_INVALID', `basis_quote 不在 Story 正文中: ${q.basis_quote}`);
     }
   }
   const dup = existing.some((x) => x.scope === q.scope && x.target?.experience_id === q.target?.experience_id && x.target?.story_id === q.target?.story_id && x.basis_quote === q.basis_quote);
@@ -132,7 +131,7 @@ export async function planExperienceQuestions({ store, llm, experience, model, c
     scope: 'experience', purpose: 'complete_story', target: { experience_id: experience.experience_id },
     action: 'enrich_story', evidence_rev: experience.evidence_rev || 0,
   }).filter((q) => !existing.some((e) => e.question_id === q.question_id));
-  const valid = questions.filter((q) => { try { validateQuestion(q, { library: [], existing }); return true; } catch { return false; } });
+  const valid = questions.filter((q) => { try { validateQuestion(q, { library: [{ ...experience, stories: model.stories ?? [] }], existing, corpus: JSON.stringify(model) }); return true; } catch { return false; } });
   const saved = await store.saveQuestions('experience', experience.experience_id, {
     evidence_rev: experience.evidence_rev || 0,
     questions: [...existing, ...valid],

@@ -529,6 +529,68 @@
 - **N-039 部分修复**：`renumber` 已加；第二次 smoke 的 issues 已无 bullet 编号乱序（Critic 不再报缺 b2）。
 - **仍未验证/开放**：N-012（≥3 段硬断言）、N-020（目录布局）、N-021（逐节点 debug/token）、N-026（A3 候选仍未进入 P2 prompt）；N-035（准入 flags 兜底）、N-036（Fragment 不进下游）仍为设计缺口，等用户决策。
 
+## 十一、2026-11-25 00:00 复核（提交 f19229f 后）
+
+> Lead 已提交 `f19229f feat(v5): 按 INPUT-FOLLOW 从 0 实现…`（含 core、v5-cli、测试、`V5-IMPLEMENTATION.md` 与我的 `IMPLEMENTATION-NOTES.md`）。以下针对提交版本复核。
+
+### N-045 手改保护 `mergeWithCurrent` 的合并规则是新增临时方案，设计未定义；会静默丢弃「同一 Story 的新版」
+
+- **日期**：2026-11-25 00:00（00:03 按 Lead 确认更新）
+- **问题**：为满足「再次抽取不覆盖手改」，实现用「raw_quote 命中即视为同一 Story → 整条保留旧版、丢弃 incoming 新版；无命中的追加」的确定性合并；设计只规定「手改优先」，没定义重抽合并算法。
+- **设计原文**：§2 规则 3「人直接手改 Markdown = 直接生效；AI 不覆盖」；§11.2 用例 3；§10.7「回答 → P1 → 人确认 Story 列表 → 更新 Markdown」；§4.6 一遍抽取消除了两遍抽取。
+- **实际做法/证据**：`core/extract.mjs:171-193`：`quoteToExisting` 按 raw_quote 建映射；命中的 incoming Story 被 `continue` 丢弃；新增 Story `order = ++maxOrder` 追加为顶层（父节点若无法解析则降为 null）；Fragment 按 body 归一化去重。没有「用新版替换旧版 / 合并槽位」的交互或规则。Lead 已确认该缺口，并按「**再次录入只追加、不改旧卡**」临时实现，记入 `V5-IMPLEMENTATION.md §5` 待拍板。
+- **影响**：用户未手改、但新 raw 让 AI 对同一 Story 有更完整槽位/结果时，改进被静默丢弃；用户只能得到「旧 Story + 新追加 Story」，可能重复/割裂；设计文档没有这段规则，属于必须回写或明确否定的决策点。
+- **临时或永久**：临时实现方案（可逆）；建议回写设计「重抽合并规则」（例如：命中 quote 时给用户三选：保留旧/用新版/合并；或明确只追加不改），并明确父/子与 order 在合并时的规则。
+- **待用户确认**：是（重抽合并/替换语义）。
+
+### N-046 【已修复·回归测试】提交版 `mergeWithCurrent` 缺 `norm` 导入：第二次「补充输入 → 确认」且 Draft 含 Fragment 时崩溃
+
+- **日期**：2026-11-25 00:00（00:03 复核已修）
+- **问题**：`core/extract.mjs` 手改保护 `mergeWithCurrent` 使用 `norm(...)`，但文件顶部没有导入 `norm`（`norm` 在 `types.mjs` 导出）。
+- **设计原文**：§11.2 用例 3「用户手改 Story 后再抽取（不覆盖手改）」；§10.7「回答 → 新 raw → P1 → 人确认」。
+- **实际做法/证据**：修复前直接调用 `mergeWithCurrent({…stories:[],fragments:[]}, {…fragments:[{body:'新片段'}]})` → `ReferenceError: norm is not defined`；真实 P1 几乎每次都会产 Fragment（两次独立真实 smoke 分别有 2 个 / 1 个），因此「第二次 input + confirm」主路径在真实模型下必崩。
+- **修复**：`75f76bd fix(v5): import norm in extract, add fragment merge regression test`：`extract.mjs` 已 `import { …, norm, … }`；新增测试「第二次输入带 Fragment 时融合不崩溃（回归 norm 未定义）」。复核 `node --test` 全绿（v5 文件 8 项；全套含 v2 共 16 项通过）。
+- **影响**：修复后闭环可用；该 bug 暴露了「mock P1 fragments 恒为空」导致测试盲区，已在回归测试中覆盖。
+- **临时或永久**：已修复（永久）。
+- **待用户确认**：否。
+
+### 本轮状态更新（提交 f19229f 版本）
+
+| 编号 | 状态 | 说明 |
+| --- | --- | --- |
+| N-042 | 已修复 | `core/questions.mjs:49-50` 明确拒绝 `support:"none"` 假候选；但因此 `coverage_missing` 实际不会产出（见 N-044）。`V5-IMPLEMENTATION.md §5.1` 已把「零覆盖 0 问题」写成已知边界。 |
+| N-044 | 边界已记录、设计未改 | Lead 选择「不造假候选，缺口由 Critic 报告」，并写进 `V5-IMPLEMENTATION.md §5.1`；`INPUT-FOLLOW.md` 未改，所以设计里 `coverage_missing` 仍是「应有」的问题类型。仍需用户拍板 3 个方向。 |
+| N-034 | 已修复 | `answerQuestion` 不再提前 expire；expire 在 `pipeline.mjs:22-27` 确认成功后。 |
+| N-033 | 部分修复 | 测试新增「A3 拒绝 support=none」「手改 Markdown 不被覆盖」2 项（13/13）；仍缺 fragment/二次确认（正好漏掉 N-045）、摘要/归属/范围落盘、0-Story/2 段/短答案等断言。 |
+| N-021 | 部分修复 | `store.debug` 已接 P1/P2/P10/generate；`run.llm_stats` 已保存（`generate.mjs:203`）；R4/R5/R6/R7/R8 仍无逐节点 token/耗时（`V5-IMPLEMENTATION.md §5.5` 已承认）。 |
+| N-039 | 大部分修复 | `validateGenerated` 现把 `validateContent` 的 errors 转成 `length` issues（`generate.mjs:117-119`），新增「父 Story 不得作证据」「jd_quote ∈ JD」「重复 bullet」检查；issues 与最终 validation 对齐性仍受 `normalizeLengths` 在 issues 之后执行影响。 |
+| N-030 | 部分修复 | metadata 行过滤 + findLine 归并保留；JD 里「本科及以上在读」等经历无法覆盖的要求仍会作为 none 行（导致 Critic 提示但无法回答）。 |
+| N-040 | 部分修复 | 只裁不补已定；`ensureMin` 死代码可删；issues 不随 adjustments 重算。 |
+
+## 十二、收尾（2026-11-25 00:05，HEAD `75f76bd`）
+
+### 最终验证
+
+- `node --test` 全绿：v2 8 项 + v5 8 项，共 16 项通过（`prototype/tests/v5-core.test.mjs` 8 项，含「Markdown 父子/摘要/归属/范围 roundtrip」「A3 拒绝 support=none」「手改 Markdown 不被覆盖」「第二次输入带 Fragment 融合不崩溃」）。
+- `git log`：`75f76bd fix(v5): import norm in extract, add fragment merge regression test`（HEAD，已推 `feat/input-follow-v5`）。
+- 独立真实数据 smoke（真实 DeepSeek + 真实语料，本 notes 记录 2 次）：`run_f499e9886a26d2`、`run_1f46e331c60a05`；结果为设计判断提供真实证据（见 §七/§九）。
+- 我的职责边界：只改本 notes 文件；未改实现/测试/设计文档。`IMPLEMENTATION-NOTES.md` 在 `f19229f` 中已被 Lead 一并提交；`75f76bd` 之后的本次 N-045/N-046 补记仍在工作区（未提交），由 Lead 决定是否随最终提交入库。
+
+### 待用户确认清单（汇总，最终）
+
+1. **N-044 零覆盖问题**：`coverage_missing` 的「库里有相关经历」与 A3「候选 Story 存在」互斥；当前不造假候选 → 真实零覆盖 0 问题、只由 Critic 报缺口。**需拍板方向**（只挂 experience 级目标 / 只作 Critic 缺口 / 用 P4 missing 造 experience 级候选），并回写 §10.2/A3。
+2. **N-045 重抽合并规则**：当前「再次录入只追加、不改旧卡」；需确认是否接受，或设计「保留旧/用新版/合并」的三选交互并回写 §10.7/§11.2。
+3. **N-007 N-006 元叙述/0-Story**：真实 raw 的「尚未提供/挂名/与扣子重复」与「未分配=硬错误」冲突；0-Story 经历现允许 Fragment-only。需设计「非事件性原话」通道。
+4. **N-009 profile/education**：教育背景/GPA 无落点，Critic 实测报「本科及以上在读无法体现」；需确认是否纳入 INPUT-FOLLOW。
+5. **N-012 3 段硬门槛**：`library<3` 直接失败，与「宁可少写」张力；需确认硬/软约束。
+6. **N-035 准入兜底**：总述/荣誉型 Story 无 flags 提示、无机器 admission 校验；需确认是否加确定性兜底。
+7. **N-036 Fragment 不进下游**：口径/边界（「3000 好友≠触达」「线上线下不混算」）不进 R4/R6/R7，生成侧可能夸大；需补设计（Fragment/raw 作为边界约束输入或经历级 background）。
+8. **N-020 目录布局**：实现 `<data>/v5/experiences/<id>/…`，设计 §8 是扁平路径；需决定回写还是改回。
+9. **N-021 逐节点留痕**：仅 P1/P2/P10/generate 有 debug，R4/R5/R6/R7/R8 无 token/耗时；需确认是否补齐。
+10. **N-030 JD 覆盖口径**：JD 行切分 + metadata 过滤是启发式；需定义规范化 JD 要求集合与 quote 对齐（或接线 P3）。
+
+
+
 
 
 
