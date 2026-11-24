@@ -29,9 +29,9 @@
 | 标记 | 含义 |
 | --- | --- |
 | **F1–F6** | 字段/数据结构 |
-| **P1–P9** | 提示词契约 |
+| **P1–P10** | 提示词契约 |
 | **R0–R9** | 角色（Human / AI 固定角色） |
-| **A1–A2** | 确定性算法节点（非 LLM） |
+| **A1–A3** | 确定性算法节点（非 LLM） |
 
 - **F1** 经历字段：`type / name / role / time`
 - **F2** raw：不可变原话
@@ -236,22 +236,25 @@ time: 2025-10 ~ 2025-11 # 可选
 | --- | --- | --- | --- | --- |
 | R0 | Human | 人 | 新建/选择经历、输入、确认 Story 列表、回答、终审 | — |
 | R1 | Extractor | AI | raw → AI Draft（Story 列表 + 槽位 + Fragment + 未分配细节） | 不写 Markdown、不编事实、不设密度目标 |
-| R2 | Experience Questioner | AI | 经历录入后找缺失/含糊/矛盾，生成问题 | 不补内容、不问泛泛 |
+| R2 | Experience Question Planner | AI | 经历录入后找缺失/含糊/矛盾，生成问题 | 不补内容、不问泛泛、不看 JD |
 | R3 | JD Note | AI（可选） | 带逐字 quote 的 JD 阅读笔记 | 不做 must 门禁、不选材 |
 | R4 | Experience Evaluator | AI（每经历并行） | 原始 JD + 该经历所有 Story → `use/hold/drop` + 证据 + 缺失 | 不跨经历、不打分、不选最终组合 |
 | R5 | Selector/Planner | AI | 汇总各经历评估，决定 3–4 段、每段约 4 条、顺序、背景 | 不编事实、不写 bullet 正文 |
 | R6 | Composer | AI | Story → bullet（约 40 字）+ 背景 | 不改事实、不跨 Story 拼造 |
 | R7 | Critic | AI | 整份简历评审，输出 issues | 不改稿、不新增事实 |
 | R8 | Revisor | AI（有界） | 只按 issues 修订，最多 1–2 轮 | 不扩大范围、不新增事实 |
-| R9 | JD Questioner | AI | 覆盖弱/无证据时生成补充问题 | 不补内容、不设 must 门禁 |
+| R9 | Resume Question Planner | AI | 看 JD+简历+全库，找"可新增一条内容"的覆盖缺口并提问 | 不改写已选 bullet、不做措辞/风格问题 |
 | A1 | Aggregator | 算法 | 合并 R4 结果、去重、覆盖统计 | 不做语义判断 |
-| A2 | Validator | 算法 | schema/引用/字数/顺序/重复校验 | 不改写 |
+| A2 | Validator | 算法 | schema/引用/字数/顺序/重复/问题校验 | 不改写 |
+| A3 | Question Candidate Detector | 算法 | 从覆盖/未选 Story/提而未展/Story 完整度出候选缺口 | 不做提问措辞、不编事实 |
 
 **没有自主 Agent**：R4 是并行 worker，R5 是汇总判断角色，R7/R8 是固定评审/有界修订，全部单轮、固定 I/O。
 
 ---
 
-## 7. 节点契约与提示词（P1–P9）
+## 7. 节点契约与提示词（P1–P10）
+
+> 编号说明：P9 原「JD Questioner」已合并进 P10（Resume Question Planner），P9 号保留空缺。
 
 ### P1 · R1 Extractor（一遍抽取）
 
@@ -408,20 +411,48 @@ time: 2025-10 ~ 2025-11 # 可选
 3. 最多 1 轮（可配 2 轮）；修不掉交人工；
 4. 输出 diff/修改说明。
 
-### P9 · R9 JD Questioner
+### P10 · R9 Resume Question Planner
 
-**输入**：JD 原文 + 覆盖统计 + 草稿。
+**输入**：
+- JD 原文；
+- 当前简历 bullets + 选中的 Story；
+- 全库 Story（含未选中的）；
+- A1 覆盖统计 + R4 matched/missing；
+- A3 候选缺口；
+- Critic issues。
+
 **输出**：
 
 ```json
-{ "questions": [{ "jd_quote": "", "experience_id": "", "story_id": "", "missing": ["metric","scope"], "basis": "", "question": "", "expected_answer": "" }] }
+{
+  "questions": [{
+    "question_id": "hash",
+    "scope": "resume",
+    "purpose": "add_content|fix_evidence",
+    "basis_type": "coverage_missing|adjacent_unselected|mention_not_expanded|evidence_blocker",
+    "action": "add_story|add_bullet",
+    "jd_quote": "逐字引用",
+    "experience_id": "",
+    "story_id": "",
+    "basis_quote": "当前 bullet/Story 原文",
+    "missing": ["metric","scope"],
+    "question": "你在 A 里提到用过 RAG，但只写了使用；JD 要求 RAG 落地，能否补充你具体怎么用（检索范围、召回、评估）？",
+    "expected_answer": { "fields": ["workflow","metric"], "format": "一句话" },
+    "priority": "high|medium|low",
+    "expected_effect": "补一条 RAG 落地 bullet，覆盖 JD 第 3 条"
+  }]
+}
 ```
 
 **提示词硬规则**：
-1. 只针对"重要且覆盖弱/无证据"的要求；
-2. 必须引用 JD 原文和现有 Story/bullet；
-3. 一次一个维度；最多 3 条；
-4. 不假设事实；回答写回 raw，重新走 P1。
+1. **已选中的 bullet 视为可信**：不要提"改措辞/换风格/改事实"的问题；这些交给 Critic/Revisor；
+2. 只问"回答后能**新增一条故事/内容**（或补足一条证据）"的问题；
+3. 问题必须同时引用：JD 原文 + 当前依据（bullet/Story/raw）；
+4. 优先从**未选中的 direct/adjacent Story**里找，而不是让用户从零讲；
+5. 一次只问一个缺失维度；答案可映射到 Story 字段；
+6. 最多 3 条；按覆盖影响排序；不设 must 门禁；
+7. 若回答只能改善措辞/风格 → 不提问；
+8. 不假设事实、不替用户回答。
 
 ### A1 · Aggregator（算法）
 
@@ -437,7 +468,23 @@ time: 2025-10 ~ 2025-11 # 可选
 2. `jd_quote` ∈ JD；`story_quote/evidence_quote` ∈ Story 原文或 raw；
 3. 字数/背景格式；重复 bullet；
 4. 父 Story 不得作为 bullet 证据；
-5. 输出 issues（与 Critic 同 schema），不改稿。
+5. 输出 issues（与 Critic 同 schema），不改稿；问题对象也必须过一遍 schema/basis/target 校验。
+
+### A3 · Question Candidate Detector（算法）
+
+输入：R4/A1 覆盖、当前简历、全库 Story、Story 完整度、Critic issues。
+输出候选（不写问题文案）：
+
+```json
+[{ "scope": "experience|resume", "basis_type": "", "target": { "experience_id": "", "story_id": "", "bullet_id": "" }, "jd_quote": "", "basis_quote": "", "missing": [], "source": "" }]
+```
+
+规则：
+1. 经历侧：Story 缺字段、raw 未分配、矛盾、含糊动作；
+2. 简历侧：JD 覆盖 none/弱、库中 direct/adjacent 但未选的 Story、已选 bullet 提到但证据只到 adjacent/partial；
+3. 去重（target+basis_type+basis_quote）、不做措辞、不编事实；
+4. 候选交给 P2/P10，不直接展示。
+
 
 ---
 
@@ -460,8 +507,9 @@ time: 2025-10 ~ 2025-11 # 可选
 | 13 | A2 | 草稿 | 校验 | issues |
 | 14 | R7 | 草稿+JD | P7 | issues |
 | 15 | R8（条件） | 草稿+blocker | P8 | 修订稿+diff |
-| 16 | R9（条件） | coverage/草稿 | P9 | 问题 |
-| 17 | R0 | 草稿+issues | 终审/导出 | run 完成 |
+| 16 | A3 | coverage/简历/全库 | 候选缺口检测 | candidates |
+| 17 | R9（条件） | candidates | P10 | 简历问题 |
+| 18 | R0 | 草稿+issues | 终审/导出 | run 完成 |
 
 **落盘**：
 - `raw/raw_<id>.json`：`{raw_id, experience_id, text, at}`；
@@ -484,21 +532,138 @@ time: 2025-10 ~ 2025-11 # 可选
 
 ---
 
-## 10. 问题机制
+## 10. 问题引擎（两套问题，不混用）
 
-- 两种触发：经历录入后（R2）；JD 生成后（R9）。
-- Gap/Question 必须带：`{scope, experience_id, story_id, missing[], basis_quote, question, expected_answer}`。
-- 提问门槛：回答会改变 bullet 质量；否则不问。
-- 回答 → 新 raw → P1 Draft → 人确认 Story 列表 → 更新 Markdown → 局部重跑 R4/R5/R6。
-- 禁止：泛问、诱导编造、把答案直接写进正文。
+### 10.1 先定"为什么问"
 
----
+| 问题类型 | 目的 | 不能用来做什么 |
+| --- | --- | --- |
+| **经历问题（Experience Question）** | 让库里的 Story 更完整、更可复用、更能支撑未来 bullet | 不替用户编内容；不改已确认的事实；不是为了"问而问" |
+| **简历问题（Resume Question）** | 提升简历对目标 JD 的覆盖与贴合；**新增一条内容/故事** | 不改写已选中的可信 bullet；不为了措辞/风格提问（那是 Critic/Revisor 的事） |
+
+两者共用 `Question` 对象、存储和展示层，但**生成依据、目的、输入、提示词完全分开**。
+
+### 10.2 生成依据（basis）从哪来
+
+#### 经历问题
+
+| basis_type | 依据 | 例子 | 目的 |
+| --- | --- | --- | --- |
+| `story_incomplete` | Story 缺 `result` / `metric` / `ownership` / `scope` / 关键上下文 | "你写了转化率提升，但没写口径" | 补全 Story |
+| `raw_unassigned` | `unassigned_details` 或 raw 里有信息点没进任何 Story/Fragment | "原文提到复盘文档，但 Story 里没有" | 捕获遗漏事实 |
+| `contradiction` | Story 之间/Story 与 raw 的时间、数字、角色冲突 | "一处写 2000 份，一处写 200 份" | 消除矛盾 |
+| `vague_action` | 动作过于笼统，无法写 bullet | "负责运营"但没有具体动作/结果 | 具体化 |
+
+#### 简历问题
+
+| basis_type | 依据 | 例子 | 目的 |
+| --- | --- | --- | --- |
+| `coverage_missing` | JD 引用在 A1 覆盖中为 `none`/弱，且库里有相关经历 | JD 要求 RAG 落地，但简历没体现 | **新增 Story/bullet** |
+| `adjacent_unselected` | R4 发现库中 Story 有 `direct/adjacent` 证据，但没被选进简历 | A 经历里有 RAG 项目，但这次没选 | 新增一条内容 |
+| `mention_not_expanded` | 已选 bullet/Story 提到了 JD 关心的能力，但证据只到 `adjacent/partial` | "A 里只提了一句用过 RAG，没展开" | 补充新 Story/细节，而不是改旧句 |
+| `evidence_blocker` | Critic 发现某 bullet 无依据，且缺失必须由用户提供 | 数字没有出处 | 只在"必须补证据"时问；否则 Revisor 处理 |
+
+**硬规则：没有 basis 就没有问题；不许"请多补充一点"这种无依据提问。**
+
+### 10.3 生成流程
+
+```
+A3 候选缺口检测（算法）
+  ├─ 经历：Story 缺字段/未分配细节/矛盾/含糊
+  └─ 简历：覆盖缺失/未选 Story/提而未展/Critic 证据问题
+        ↓
+P2 经历问题规划（LLM）        P10 简历问题规划（LLM）
+        ↓                              ↓
+A2 问题校验（算法：basis 存在、target 存在、单维度、可回答、不重复）
+        ↓
+Question Store（状态 + evidence_rev）
+        ↓
+展示：经历页 inline 列表 / 简历页气泡或评论
+```
+
+### 10.4 何时生成、多久更新、展示多少
+
+| 维度 | 经历问题 | 简历问题 |
+| --- | --- | --- |
+| 触发 | Story 列表确认后；用户回答后；手改 Markdown 后；打开经历时（ lazy） | compose + Critic 完成后；改选卡/JD 后；回答后 |
+| 不触发 | 每次按键、每次输入（避免刷屏） | 每次按键、每次预览 |
+| 更新范围 | 只重算受影响的 Story；新增/已回答/已忽略去重 | 只重算受影响的 JD 引用/经历；不全局重来 |
+| 展示数量 | 每次最多 **3 条**，其余进 backlog | 每次最多 **3 条**（气泡/评论），其余进 backlog |
+| 频率 | **事件驱动**，不做定时轮询 | 事件驱动，一次 run 一次 |
+| 已回答 | 标 `answered`，不再展示；同类降权 | 标 `answered`；对应 Story 更新后可能产生新问题 |
+| 依据变化 | `evidence_rev` 变化 → 旧问题标 `expired`，重新评估 | 改选卡/回答后 → 旧问题失效/重算 |
+
+**回答一次就更新，不是每输入一次就重来一轮。**  
+"问题一直有"≠"每次都问"：维护 backlog，只展示当前最高价值的 1–3 条；用户可 dismiss，系统不纠缠。
+
+### 10.5 展示方式
+
+- **经历**：经历详情页的"建议补充"列表/侧栏；每行：问题、依据、缺失字段；可展开来源。
+- **简历**：气泡/评论锚定到 `bullet_id` 或经历；`action=add_story` 时显示"建议新增一条内容"；回答后不直接改简历，而是生成新 Story 提案，用户确认后入库并重算。
+- 气泡和经历问题是**同一个 Question 对象**，只是 `surface` 不同。
+
+### 10.6 问题对象与存储
+
+```json
+{
+  "question_id": "q_hash(target+basis_type+basis_quote)",
+  "scope": "experience | resume",
+  "purpose": "complete_story | add_content | fix_evidence",
+  "basis_type": "story_incomplete | raw_unassigned | contradiction | coverage_missing | adjacent_unselected | mention_not_expanded | evidence_blocker",
+  "target": { "experience_id": "", "story_id": "", "bullet_id": "" },
+  "jd_quote": "",
+  "basis_quote": "",
+  "missing": ["result", "metric"],
+  "question": "",
+  "expected_answer": { "fields": [], "format": "一句话" },
+  "action": "enrich_story | add_story | add_bullet",
+  "priority": "high | medium | low",
+  "status": "candidate | asked | answered | dismissed | expired",
+  "evidence_rev": 12
+}
+```
+
+- 存在 `questions/<experience_id>.json` 与 `runs/<run_id>.json` 的 `questions`；
+- 不写进 Markdown；
+- `question_id` 哈希去重；`evidence_rev` 控制失效；
+- 回答历史保留，避免重复问。
+
+### 10.7 回答回流
+
+1. 回答 → 新 `raw`；
+2. 只对相关经历跑 P1 → AI Draft；
+3. 人确认 Story 列表 → 更新 Markdown；
+4. 重算相关 coverage / 受影响 Story / 相关 bullet；
+5. 旧问题 `answered`；依据变化的问题 `expired`；新缺口进 backlog；
+6. 不全局重跑，不做无限追问；最多一次澄清性 follow-up（仍不足则标 `needs_manual`）。
+
+### 10.8 两套问题的关键差异
+
+| 项 | 经历问题 | 简历问题 |
+| --- | --- | --- |
+| 目的 | 资产完整性 | JD 覆盖与贴合 |
+| 核心依据 | Story 完整度、raw 未分配、矛盾 | JD 覆盖缺口、未选 Story、提而未展 |
+| 动作 | 补/改 Story | **新增 Story/bullet** |
+| 输入 | Markdown + raw + Story | JD + 当前简历 + 全库 Story + 覆盖 + Critic |
+| 是否看 JD | ❌ | ✅ |
+| 展示 | inline | 气泡/评论 |
+| 数量 | ≤3/次 | ≤3/次 |
+| 回答后 | 更新库 | 先入库，再重算简历 |
+
+### 10.9 提示词
+
+- 经历问题：P2（见第 7 节）。
+- 简历问题：P10（见第 7 节）。
+- 候选检测：A3（算法，见第 6 节）。
+- 问题校验：A2（扩展 schema：basis 必须存在于当前材料，target 必须存在，单维度，不重复）。
+
+
 
 ## 11. 调试与测试
 
 ### 11.1 节点留痕
 
-`debug/<run_id>/<R1..R9|A1|A2>.json`：
+`debug/<run_id>/<R1..R10|A1|A3>.json`：
 ```
 { node_id, prompt_id, prompt_version, model, input, output, validation, tokens, elapsed_ms, at }
 ```
@@ -514,11 +679,15 @@ time: 2025-10 ~ 2025-11 # 可选
 7. 父 Story 不作为 bullet 证据；
 8. 同经历多 story 的 use/hold/drop 与最终选择一致；
 9. quote 不在原文 → Validator 拦截；
-10. Critic blocker → Revisor 修订 → 仍不行交人工。
+10. Critic blocker → Revisor 修订 → 仍不行交人工；
+11. 经历问题：basis 必须来自 Story/raw，不能凭空问；
+12. 简历问题：只能新增 Story/bullet，不能要求改写已选 bullet；
+13. 回答后旧问题 resolved/expired，同一依据不重复问；
+14. `mention_not_expanded` 能识别\"只提了一句 RAG\"并生成新增问题。
 
 ### 11.3 验收
 
-- 角色 R0–R9/A1–A2 都有输入/输出/落盘/失败分支；
+- 角色 R0–R9/A1–A3 都有输入/输出/落盘/失败分支；
 - 每个字段有明确写入者/读取者；
 - 每个 prompt 有版本/schema/校验；
 - 不存在"只写在文档里、没有实现出口"的节点。
