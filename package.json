@@ -1,11 +1,13 @@
-﻿{
+{
   "name": "resume-core",
   "private": true,
   "type": "module",
   "description": "简历工作台核心链路（数据建卡 → 语义扫描 → 三区编译 → 评论/补卡）",
   "scripts": {
     "test": "node --test --test-concurrency=1 prototype/tests/pipeline-mock.test.mjs prototype/tests/data-deps.test.mjs",
-    "test:live": "node prototype/tests/live-e2e.mjs",`n    "eval:real": "node prototype/eval/run-real.mjs",`n    "eval:analyze": "node prototype/eval/analyze.mjs",
+    "test:live": "node prototype/tests/live-e2e.mjs",
+    "eval:real": "node prototype/eval/run-real.mjs",
+    "eval:analyze": "node prototype/eval/analyze.mjs",
     "cli": "node prototype/cli.mjs",
     "serve": "node prototype/serve.mjs"
   }
