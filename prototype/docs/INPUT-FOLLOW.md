@@ -174,9 +174,9 @@ AI 生成 Draft 后，界面/CLI 展示**Story 列表**，每行：
 
 ### 4.6 一遍抽取（不做两遍）
 
-- 只调用一次 P1：一次输出 Story 列表 + 6 槽位 + Fragment + 未分配细节；
+- 只调用一次 P1：一次输出 Story 列表 + 6 槽位 + Fragment；所有 raw 信息必须被 Story/Fragment 覆盖，**不允许有未分配信息**；
 - 不返回原文重新看：raw 本来就在库里；
-- 防丢信息：P1 必须输出 `unassigned_details`（没被任何 Story/Fragment 覆盖的信息点），程序展示给人；
+- 防丢信息：P1 输出 `unassigned_details` 仅用于**校验**；该字段必须为空。非空 = 抽取失败，阻断入库、要求重抽或人工归位，**不能变成提问**；
 - 不设"目标 5–8 张"：**删掉固定密度**，按事件边界自然切；数量由 Raw 决定；
 - 切太碎/太笼统由人确认列表时合并/拆分修正。
 
@@ -235,7 +235,7 @@ time: 2025-10 ~ 2025-11 # 可选
 | ID | 角色 | 类型 | 职责 | 明确不做 |
 | --- | --- | --- | --- | --- |
 | R0 | Human | 人 | 新建/选择经历、输入、确认 Story 列表、回答、终审 | — |
-| R1 | Extractor | AI | raw → AI Draft（Story 列表 + 槽位 + Fragment + 未分配细节） | 不写 Markdown、不编事实、不设密度目标 |
+| R1 | Extractor | AI | raw → AI Draft（Story 列表 + 槽位 + Fragment；未分配=失败） | 不写 Markdown、不编事实、不设密度目标 |
 | R2 | Experience Question Planner | AI | 经历录入后找缺失/含糊/矛盾，生成问题 | 不补内容、不问泛泛、不看 JD |
 | R3 | JD Note | AI（可选） | 带逐字 quote 的 JD 阅读笔记 | 不做 must 门禁、不选材 |
 | R4 | Experience Evaluator | AI（每经历并行） | 原始 JD + 该经历所有 Story → `use/hold/drop` + 证据 + 缺失 | 不跨经历、不打分、不选最终组合 |
@@ -246,7 +246,7 @@ time: 2025-10 ~ 2025-11 # 可选
 | R9 | Resume Question Planner | AI | 看 JD+简历+全库，找"可新增一条内容"的覆盖缺口并提问 | 不改写已选 bullet、不做措辞/风格问题 |
 | A1 | Aggregator | 算法 | 合并 R4 结果、去重、覆盖统计 | 不做语义判断 |
 | A2 | Validator | 算法 | schema/引用/字数/顺序/重复/问题校验 | 不改写 |
-| A3 | Question Candidate Detector | 算法 | 从覆盖/未选 Story/提而未展/Story 完整度出候选缺口 | 不做提问措辞、不编事实 |
+| A3 | Question Candidate Detector | 算法 | 从覆盖/未选 Story/有潜力但未生成 bullet/Story 完整度出候选缺口 | 不做提问措辞、不编事实 |
 
 **没有自主 Agent**：R4 是并行 worker，R5 是汇总判断角色，R7/R8 是固定评审/有界修订，全部单轮、固定 I/O。
 
@@ -286,7 +286,7 @@ time: 2025-10 ~ 2025-11 # 可选
 5. 没有明确时间就不写时间；顺序沿用原文；不推断；
 6. 六槽位尽量填，缺就写"未提及"；不作为拒绝依据；
 7. `raw_quotes` 1–3 句逐字；`boundary_reason` 必填；
-8. 未归入任何 Story/Fragment 的信息必须放 `unassigned_details`，不得静默丢弃；
+8. 所有 raw 信息都必须归入 Story/Fragment；`unassigned_details` 必须为空。非空即失败，不得静默丢弃，也不得转成用户问题；
 9. 只在必要时建议父/子层级：父要有跨子目标的总目标/总结果，且子事件独立；否则平铺；
 10. 只输出 Draft，不输出"已修改的 Markdown"。
 
@@ -305,7 +305,7 @@ time: 2025-10 ~ 2025-11 # 可选
 1. 只基于已有内容提问；
 2. 一次一个维度；绑定具体 story + 缺失项；
 3. 只问"回答后会改变 bullet 质量"的点；
-4. 最多 3 条；不问泛泛问题；
+4. 全部输出找到的问题，不设上限；UI 每次展示 3 条，可循环；不问泛泛问题；
 5. 不替用户回答、不假设事实。
 
 ### P3 · R3 JD Note（可选）
@@ -428,8 +428,8 @@ time: 2025-10 ~ 2025-11 # 可选
   "questions": [{
     "question_id": "hash",
     "scope": "resume",
-    "purpose": "add_content|fix_evidence",
-    "basis_type": "coverage_missing|adjacent_unselected|mention_not_expanded|evidence_blocker",
+    "purpose": "add_content",
+    "basis_type": "coverage_missing|adjacent_unselected|unrealized_potential",
     "action": "add_story|add_bullet",
     "jd_quote": "逐字引用",
     "experience_id": "",
@@ -446,13 +446,14 @@ time: 2025-10 ~ 2025-11 # 可选
 
 **提示词硬规则**：
 1. **已选中的 bullet 视为可信**：不要提"改措辞/换风格/改事实"的问题；这些交给 Critic/Revisor；
-2. 只问"回答后能**新增一条故事/内容**（或补足一条证据）"的问题；
+2. 只问"回答后能**新增一条故事/内容**"的问题；补证据属于流水线问题，不作为用户提问；
 3. 问题必须同时引用：JD 原文 + 当前依据（bullet/Story/raw）；
 4. 优先从**未选中的 direct/adjacent Story**里找，而不是让用户从零讲；
 5. 一次只问一个缺失维度；答案可映射到 Story 字段；
-6. 最多 3 条；按覆盖影响排序；不设 must 门禁；
+6. 全部输出找到的问题，不设上限；UI 每次展示 3 条，可循环；按覆盖影响排序；不设 must 门禁；
 7. 若回答只能改善措辞/风格 → 不提问；
-8. 不假设事实、不替用户回答。
+8. 不假设事实、不替用户回答；
+9. 对 `unrealized_potential` 先检查前置条件：候选 Story/经历存在、有动作+结果/交付、未被使用、回答后能生成可靠新 bullet；任一不满足 → 不提问。
 
 ### A1 · Aggregator（算法）
 
@@ -480,10 +481,12 @@ time: 2025-10 ~ 2025-11 # 可选
 ```
 
 规则：
-1. 经历侧：Story 缺字段、raw 未分配、矛盾、含糊动作；
-2. 简历侧：JD 覆盖 none/弱、库中 direct/adjacent 但未选的 Story、已选 bullet 提到但证据只到 adjacent/partial；
-3. 去重（target+basis_type+basis_quote）、不做措辞、不编事实；
-4. 候选交给 P2/P10，不直接展示。
+1. 经历侧：Story 缺字段、矛盾、含糊动作；`unassigned_details` 非空直接报错，**不进候选**；
+2. 简历侧：JD 覆盖 none/弱、库中 direct/adjacent 但未选的 Story、有潜力但没生成 bullet 的 Story/经历；
+3. 前置条件（全部满足才进候选）：候选 target 存在；有动作+结果/交付/证据；未被当前简历使用；回答后能生成可靠的新 bullet；答案能落到 Story 字段；
+4. 已生成 bullet 无依据 = 流水线错误，进 Critic/告警，不进候选；
+5. 去重（target+basis_type+basis_quote）、不做措辞、不编事实；输出全部候选，不设上限；
+6. 候选交给 P2/P10，不直接展示。
 
 
 ---
@@ -494,7 +497,7 @@ time: 2025-10 ~ 2025-11 # 可选
 | --- | --- | --- | --- | --- |
 | 1 | R0 | — | 新建/选择经历，填 type+name（role/time 选填） | front matter |
 | 2 | R0 | 文字 | 输入经历内容 | `raw/` |
-| 3 | R1 | raw+当前 Markdown | P1 一遍抽取 | AI Draft（Story 列表+槽位+Fragment+未分配） |
+| 3 | R1 | raw+当前 Markdown | P1 一遍抽取 | AI Draft（Story 列表+槽位+Fragment；未分配=失败） |
 | 4 | R0 | Draft | 确认 Story 列表（全部/逐卡合并拆分丢弃） | Markdown 落盘 |
 | 5 | R2 | Markdown | P2 | 问题（缺结果/口径/归属/矛盾） |
 | 6 | R0 | 问题 | 回答 | 新 raw → 回步骤 3 |
@@ -550,7 +553,6 @@ time: 2025-10 ~ 2025-11 # 可选
 | basis_type | 依据 | 例子 | 目的 |
 | --- | --- | --- | --- |
 | `story_incomplete` | Story 缺 `result` / `metric` / `ownership` / `scope` / 关键上下文 | "你写了转化率提升，但没写口径" | 补全 Story |
-| `raw_unassigned` | `unassigned_details` 或 raw 里有信息点没进任何 Story/Fragment | "原文提到复盘文档，但 Story 里没有" | 捕获遗漏事实 |
 | `contradiction` | Story 之间/Story 与 raw 的时间、数字、角色冲突 | "一处写 2000 份，一处写 200 份" | 消除矛盾 |
 | `vague_action` | 动作过于笼统，无法写 bullet | "负责运营"但没有具体动作/结果 | 具体化 |
 
@@ -560,17 +562,20 @@ time: 2025-10 ~ 2025-11 # 可选
 | --- | --- | --- | --- |
 | `coverage_missing` | JD 引用在 A1 覆盖中为 `none`/弱，且库里有相关经历 | JD 要求 RAG 落地，但简历没体现 | **新增 Story/bullet** |
 | `adjacent_unselected` | R4 发现库中 Story 有 `direct/adjacent` 证据，但没被选进简历 | A 经历里有 RAG 项目，但这次没选 | 新增一条内容 |
-| `mention_not_expanded` | 已选 bullet/Story 提到了 JD 关心的能力，但证据只到 `adjacent/partial` | "A 里只提了一句用过 RAG，没展开" | 补充新 Story/细节，而不是改旧句 |
-| `evidence_blocker` | Critic 发现某 bullet 无依据，且缺失必须由用户提供 | 数字没有出处 | 只在"必须补证据"时问；否则 Revisor 处理 |
+| `unrealized_potential` | 已有 Story/经历有潜力，但当前没有机会生成 bullet（含"提而未展"、证据程度不够） | "A 里只提了一句用过 RAG，没展开" | 新增一条 Story/bullet；不要求改已选 bullet |
 
 **硬规则：没有 basis 就没有问题；不许"请多补充一点"这种无依据提问。**
+
+- `unassigned_details` 非空是**流水线错误**，不是问题：必须阻断入库并修复。
+- 已生成 bullet 没有依据也是**流水线错误**，由 Critic/Revisor/告警处理，不作为用户问题。
+- `unrealized_potential` 必须先满足前置条件（候选 Story 存在、有价值、未被使用、能生成可靠 bullet），否则不提问。
 
 ### 10.3 生成流程
 
 ```
 A3 候选缺口检测（算法）
-  ├─ 经历：Story 缺字段/未分配细节/矛盾/含糊
-  └─ 简历：覆盖缺失/未选 Story/提而未展/Critic 证据问题
+  ├─ 经历：Story 缺字段/矛盾/含糊（未分配=错误，不进候选）
+  └─ 简历：覆盖缺失/未选 Story/有潜力但未生成 bullet
         ↓
 P2 经历问题规划（LLM）        P10 简历问题规划（LLM）
         ↓                              ↓
@@ -581,6 +586,29 @@ Question Store（状态 + evidence_rev）
 展示：经历页 inline 列表 / 简历页气泡或评论
 ```
 
+#### 10.3.1 候选算法（A3）具体步骤
+
+**经历侧**
+
+1. 对每张 Story 检查槽位：缺 `result/metric/ownership/scope` → 候选；
+2. 检查 Story 间/与 raw 的矛盾 → 候选；
+3. 动作过于笼统、无法支撑 bullet → 候选；
+4. `unassigned_details` 非空 → **直接报错阻断**，不进候选。
+
+**简历侧**
+
+1. 建 JD 覆盖快照：每条 JD 引用的 support = direct/adjacent/none；
+2. 对 `none/弱` 的 JD 引用，在**未选中的 Story/经历**里找 direct/adjacent 证据；
+3. 对已选 Story，检查是否存在“有潜力但没生成 bullet”的内容（动作+结果/交付存在，但未被选中/未展开）；
+4. 前置条件过滤（缺一不可）：
+   - 候选 Story/经历存在；
+   - 有动作 + 结果/交付/证据；
+   - 当前简历未使用；
+   - 回答后能生成可靠的新 bullet；
+   - 答案能落到 Story 字段；
+5. 去重（target + basis_type + basis_quote），按覆盖影响排序；
+6. **全部输出候选**，交 P2/P10；不设上限，不做措辞，不编事实。
+
 ### 10.4 何时生成、多久更新、展示多少
 
 | 维度 | 经历问题 | 简历问题 |
@@ -588,13 +616,14 @@ Question Store（状态 + evidence_rev）
 | 触发 | Story 列表确认后；用户回答后；手改 Markdown 后；打开经历时（ lazy） | compose + Critic 完成后；改选卡/JD 后；回答后 |
 | 不触发 | 每次按键、每次输入（避免刷屏） | 每次按键、每次预览 |
 | 更新范围 | 只重算受影响的 Story；新增/已回答/已忽略去重 | 只重算受影响的 JD 引用/经历；不全局重来 |
-| 展示数量 | 每次最多 **3 条**，其余进 backlog | 每次最多 **3 条**（气泡/评论），其余进 backlog |
+| 输出数量 | **全部输出**，不设上限 | **第一轮全部输出**，不设上限 |
+| UI 展示 | 每次 3 条，可循环/分页 | 每次 3 条气泡，可循环/分页 |
 | 频率 | **事件驱动**，不做定时轮询 | 事件驱动，一次 run 一次 |
 | 已回答 | 标 `answered`，不再展示；同类降权 | 标 `answered`；对应 Story 更新后可能产生新问题 |
 | 依据变化 | `evidence_rev` 变化 → 旧问题标 `expired`，重新评估 | 改选卡/回答后 → 旧问题失效/重算 |
 
 **回答一次就更新，不是每输入一次就重来一轮。**  
-"问题一直有"≠"每次都问"：维护 backlog，只展示当前最高价值的 1–3 条；用户可 dismiss，系统不纠缠。
+"问题一直有"≠"每次都问"：后台**全部生成**，UI 每屏 3 条、可循环；用户可 dismiss，系统不纠缠。
 
 ### 10.5 展示方式
 
@@ -608,8 +637,8 @@ Question Store（状态 + evidence_rev）
 {
   "question_id": "q_hash(target+basis_type+basis_quote)",
   "scope": "experience | resume",
-  "purpose": "complete_story | add_content | fix_evidence",
-  "basis_type": "story_incomplete | raw_unassigned | contradiction | coverage_missing | adjacent_unselected | mention_not_expanded | evidence_blocker",
+  "purpose": "complete_story | add_content",
+  "basis_type": "story_incomplete | contradiction | vague_action | coverage_missing | adjacent_unselected | unrealized_potential",
   "target": { "experience_id": "", "story_id": "", "bullet_id": "" },
   "jd_quote": "",
   "basis_quote": "",
@@ -642,12 +671,12 @@ Question Store（状态 + evidence_rev）
 | 项 | 经历问题 | 简历问题 |
 | --- | --- | --- |
 | 目的 | 资产完整性 | JD 覆盖与贴合 |
-| 核心依据 | Story 完整度、raw 未分配、矛盾 | JD 覆盖缺口、未选 Story、提而未展 |
+| 核心依据 | Story 完整度、矛盾、含糊动作 | JD 覆盖缺口、未选 Story、有潜力但未生成 bullet |
 | 动作 | 补/改 Story | **新增 Story/bullet** |
 | 输入 | Markdown + raw + Story | JD + 当前简历 + 全库 Story + 覆盖 + Critic |
 | 是否看 JD | ❌ | ✅ |
 | 展示 | inline | 气泡/评论 |
-| 数量 | ≤3/次 | ≤3/次 |
+| 数量 | 全部输出；UI 3 条/屏 | 第一轮全部输出；UI 3 条/屏 |
 | 回答后 | 更新库 | 先入库，再重算简历 |
 
 ### 10.9 提示词
@@ -675,7 +704,7 @@ Question Store（状态 + evidence_rev）
 3. 用户手改 Story 后再抽取（不覆盖手改）；
 4. 完整流程含 0→1 与 1→100（拆成多张叶子/父子）；
 5. raw 写"参与"不得改"主导"；
-6. `unassigned_details` 不为空时提示；
+6. `unassigned_details` 非空时阻断入库并触发重抽/人工修复，不作为问题；
 7. 父 Story 不作为 bullet 证据；
 8. 同经历多 story 的 use/hold/drop 与最终选择一致；
 9. quote 不在原文 → Validator 拦截；
@@ -683,7 +712,7 @@ Question Store（状态 + evidence_rev）
 11. 经历问题：basis 必须来自 Story/raw，不能凭空问；
 12. 简历问题：只能新增 Story/bullet，不能要求改写已选 bullet；
 13. 回答后旧问题 resolved/expired，同一依据不重复问；
-14. `mention_not_expanded` 能识别\"只提了一句 RAG\"并生成新增问题。
+14. `unrealized_potential` 能识别\"只提了一句 RAG\"并生成新增问题；没有候选 Story 时不得提问。
 
 ### 11.3 验收
 
