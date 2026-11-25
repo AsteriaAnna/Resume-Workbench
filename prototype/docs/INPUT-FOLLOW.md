@@ -756,6 +756,218 @@ Story 字段：
 
 ---
 
+## 15.5 问题解决与分析
+
+> 本节回答：当前“输入 → 增量 → 派生 Story”为什么会出现结构漂移；这不是单个 prompt 措辞问题，而是**数据模型 + 派生机制**的问题。
+
+### 15.5.1 现状、根因与资料结论
+
+#### 一、现状：流程存在，但“判断”没有真正落地
+
+当前实现：
+
+1. `ingest` → `appendRaw`；
+2. P11 输出 `operations[]`（append/insert/replace/merge）→ 自动应用；
+3. 每次 ingest 后，`deriveStories` 都把**整篇 narrative.md** 重新交给 P1；
+4. P1 输出一份全新的 `stories[]`；
+5. `content.md` 被整份覆盖，Story 重新分配随机 `story_id`。
+
+也就是说：
+
+- P11 是**增量**的（只改正文）；
+- P1 是**全量重写**的（每次重新切分、重新编号、重新命名）；
+- P1 的输入里**没有已有 Story**，没有 `story_id`、没有 diff、没有“保留/更新/合并”的判断；
+- 所谓“新 Story / 旧 Story 补充”的判断，实际只存在于 P11 的 prompt 文案里，P1 并没有执行这个判断。
+
+两次输入的真实结果就是证据：
+
+- 第一次：4 条 Story；
+- 第二次：5 条 Story；
+- 第一次的“公众号内容 / 报名打卡 / 对接协调”三条，第二次被合并成“日常运营与内容制作”一条；
+- Story ID、标题、边界都变了。
+
+这证明：**当前不是“增量更新 Story”，而是“每次重新生成 Story”。**
+
+#### 二、提示词层面的问题
+
+当前 P11/P1 的提示词主要是：
+
+- 输出 schema；
+- 一些“只能使用事实/不要编造”的约束；
+- 对“新事件/旧正文补充”的笼统描述。
+
+缺的是**严格决策规范**：
+
+1. 没有决策表：什么情况算“同一 Story”、什么算“新 Story”、什么算“合并”、什么算“拆分”；
+2. 没有优先级：多个规则冲突时（例如“新阶段”与“同一决策补充”）谁优先；
+3. 没有 identity：P1 不知道上一版 Story 的 `story_id`，无法输出“更新 story_x”；
+4. 没有 idempotency：同一输入跑两次，Story 数量和边界都可能不同；
+5. 没有变更范围：P1 不知道哪几段正文变了，只能全量重读；
+6. 没有校验：没有“已有 Story 是否被无故删除/重命名/合并”的检查。
+
+所以这不是“再补几句 prompt”能解决的；**prompt 没有承载一个可执行的判断算法**。
+
+#### 三、第一性原理：这是“派生视图维护”问题，不是“每次生成”问题
+
+把系统拆开看：
+
+```
+raw（事件日志，事实）
+  → narrative.md（投影 1：经历正文）
+  → Story（投影 2：生成用卡片）
+  → content.md（投影 3：Markdown 缓存）
+```
+
+- raw 是**事实**，只追加；
+- narrative / Story / content 都是**派生视图**；
+- 派生视图的正确更新方式是 **增量维护（incremental maintenance）**：
+  - 找出输入变化；
+  - 只重算受影响部分；
+  - 保留未变化的 identity；
+  - 输出可比较的 diff。
+
+当前做法是：**输入一变化，就把整张视图删掉重建**。  
+这必然导致：
+
+1. **非确定性**：LLM 每次切分/命名/合并都可能不同；
+2. **身份丢失**：Story ID 重新生成，下游引用、问题、选材无法稳定对应；
+3. **不可比较**：无法判断“这次改动是变好还是只是变了”；
+4. **成本浪费**：全量重读、全量重写；
+5. **错误放大**：一次全量重写把上一次的好结果也覆盖掉。
+
+更底层的原因：
+
+> **没有把 Story 当成“有稳定身份、可增量维护的实体”，而是当成“每次 prompt 的输出文本”。**
+
+#### 四、资料结论（简要）
+
+1. **增量视图维护（Differential Dataflow / Shared Arrangements）**  
+   将数据看成持续到达的更新，维护物化视图时按**记录级更新**处理，保留多版本状态，而不是每次重算整个集合。  
+   参考：[Shared Arrangements: practical inter-query sharing for streaming dataflows](https://ar5iv.labs.arxiv.org/html/1812.02639)
+
+2. **Event Sourcing / CQRS**  
+   raw 作为 append-only 事件日志，narrative/Story 是可重放的 projection；projection 需要**幂等**、**稳定 key**、**可回放**。  
+   参考：[Event Sourcing + CQRS](https://pkg.go.dev/github.com/quintans/eventsourcing@v0.32.0)
+
+3. **增量知识图谱/实体融合**  
+   增量构建知识图谱时，关键不是重新抽全图，而是：新实体识别、与已有实体对齐、冲突合并、保留稳定 ID。  
+   参考：[ID-GraphRAG: Incremental Construction Framework](https://dl.acm.org/doi/10.1007/978-981-92-2856-0_11)、[Multi-source knowledge graph construction through LLM-assisted incremental fusion](https://www.sciencedirect.com/science/article/pii/S2667305326000499)
+
+4. **结论**  
+   这些不是简历领域专用研究，但工程模式高度一致：  
+   **事件日志 + 稳定 key + 增量投影 + 对账/合并**，而不是“全量重写”。
+
+---
+
+### 15.5.2 解决方案
+
+目标：保留 v6 的“无人工确认 + 正文权威”，同时把 Story 从“每次重写”改成“稳定实体 + 增量维护”。
+
+#### 1. 数据模型：raw / narrative / Story Registry
+
+```
+raw/                  append-only 事件日志
+narrative.md          正文投影（段落有稳定 ID）
+story_registry.json    Story 身份注册表（id/key/status/version）
+content.md            生成缓存（从 registry 渲染）
+```
+
+`story_registry` 每项至少：
+
+```json
+{
+  "story_id": "story_stable_xxx",
+  "story_key": "exp_x|raw_quote_hash|decision_anchor",
+  "experience_id": "exp_x",
+  "status": "active|merged|split|removed",
+  "version": 3,
+  "source_paragraph_ids": ["p_2"],
+  "source_raw_quotes": ["..."],
+  "updated_at": "..."
+}
+```
+
+#### 2. 稳定身份：`story_key`
+
+不要让 LLM 每次重新发明 ID。用**事实锚点**生成稳定 key：
+
+```
+story_key = hash(
+  experience_id
+  + 主 raw_quote 归一化
+  + 决策/动作的主语与对象
+)
+```
+
+- 同一事实在不同版本 → 同一 `story_key`；
+- 文本改写不影响 key；
+- key 冲突/相似 → 进入合并审核（自动或规则）。
+
+#### 3. 增量派生协议
+
+每次 ingest：
+
+```
+P11 更新 narrative，输出 changed_paragraph_ids
+  → 计算 diff：新增/修改/删除的段落
+  → P1-Update 输入：
+       当前 narrative
+       + 已有 story_registry
+       + changed_paragraph_ids
+  → 输出 operations：
+       create / update / merge / split / delete
+       每个操作必须带 story_id 或 story_key
+  → 应用到 registry + content.md
+  → 校验：无孤儿、无重复、quote 合法、ID 稳定
+```
+
+关键：**P1-Update 不再输出“完整 Story 列表”，只输出“对已有 Story 的变更”。**
+
+#### 4. 提示词升级：从“输出 schema”变成“决策规范”
+
+P1-Update 的 prompt 必须有：
+
+1. **决策表**：
+   - 同一 `story_key` 且只补充结果 → `update`；
+   - 同一 `story_key` 且边界变化 → `merge` / `split`；
+   - 无匹配 key 且满足准入 → `create`；
+   - 原 Story 不再有正文依据 → `delete`（必须说明）。
+2. **优先级**：先匹配已有 key，再判断合并/拆分，最后才 create；禁止“先全量重写再对齐”。
+3. **保守原则**：能 update 不 create，能 merge 不 split；不确定时保留旧 Story 并标记 `needs_review`（不人工确认，但可审计）。
+4. **输出约束**：每个 operation 必须带 `story_id/key`、`source_paragraph_ids`、`source_quotes`；禁止改无关 Story。
+5. **幂等性**：同一 narrative + registry，两次运行输出应一致（temperature 0 或规则兜底）。
+
+#### 5. 全量重写只作为“修复模式”
+
+- 正常增量：P1-Update；
+- registry 损坏/大量冲突/首次迁移：才允许全量 rebuild；
+- rebuild 必须与旧 registry 对账，输出新增/删除/合并报告，而不是直接覆盖。
+
+#### 6. 校验与指标
+
+每次增量后检查：
+
+- `orphan_story`：引用的段落不存在；
+- `duplicate_story`：同 key 多 active；
+- `unstable_id`：未变更内容对应 ID 变化；
+- `silent_delete`：旧 Story 消失但无 delete 操作；
+- `quote_pass`：source_quotes 逐字命中；
+- `story_stability`：前后版本 Jaccard；
+- `over_merge`：一条 Story 包含 ≥3 类独立动作。
+
+#### 7. 落地顺序
+
+1. 先加 `story_registry` 和稳定 `story_key`（不改生成）；
+2. 把 P1 改成 P1-Update（带已有 Story + changed paragraphs）；
+3. 加 diff/对账校验；
+4. 全量 rebuild 只保留为修复命令；
+5. 用 §17/§18 指标复测，对比 Story 稳定性/过度合并/重复。
+
+---
+
+**一句话结论：**  
+当前问题不是“prompt 写得不够好”，而是 **把 Story 当成了每次生成的文本，而不是有稳定身份、可增量维护的投影**。解决方向是 **raw 事件日志 + narrative 投影 + story registry + 增量对账**，而不是继续优化“全量重写”的 prompt。
+
 # 16. 修改记录
 
 | 日期 | 版本/提交 | 改动 | 结果 |
@@ -766,7 +978,7 @@ Story 字段：
 | 2026-11-25 | `4d7ea93` | INPUT-FOLLOW 收敛为 v6 单一模型；重画流程图 | 文档不再保留旧确认模型 |
 | 2026-11-25 | `c8db9d5` | v6 图片改新文件名，避免同名旧图缓存 | 文档图与内容一致 |
 | 2026-11-25 | `67c779a` | 新增两次增量输入真实 smoke | 首次 4 Story / 第二次 5 Story；无重复段落 |
-| 本次 | §15–§18 | 追加输入/增量/派生细节、修改记录、核心指标、固定测试集 | 作为复测基线 |
+| 本次 | §15–§18 | 追加输入/增量/派生细节、15.5 根因与增量方案、修改记录、核心指标、固定测试集 | 作为复测基线 |
 
 ---
 
