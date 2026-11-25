@@ -19,9 +19,9 @@
 
 ## 1. 总流程图
 
-![v6 总流程](images/final-flow.png)
+![v6 总流程](images/final-flow-v6.png)
 
-（SVG：`images/final-flow.svg`）
+（SVG：`images/final-flow-v6.svg`）
 
 图例：
 
@@ -64,9 +64,9 @@ Human 输入
 
 ## 2. 数据与权威
 
-![v6 数据与权威](images/final-authority.png)
+![v6 数据与权威](images/final-authority-v6.png)
 
-（SVG：`images/final-authority.svg`）
+（SVG：`images/final-authority-v6.svg`）
 
 | 层 | 内容 | 谁写 | 权威 |
 | --- | --- | --- | --- |
