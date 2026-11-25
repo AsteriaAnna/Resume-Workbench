@@ -1102,7 +1102,7 @@ Experience Curator Agent（每个经历一个）
 > 变量统一用 `{{...}}` 表示，由代码替换为 JSON；所有生成调用 `temperature=0`（评估器可用 0）。
 > 原则：一个 prompt 只做一件事；ID/哈希由代码算，不让模型“发明”；输出必须过 Validator。
 
-### 8.1 阶段一 · P11：经历正文增量合并
+##### 8.1 阶段一 · P11：经历正文增量合并
 
 ```text
 # Role
@@ -1152,7 +1152,7 @@ D. 顺序/指代不确定 → unresolved，不猜。
 }
 ```
 
-### 8.2 阶段一 · P1-Update：只更新受影响的 Story
+##### 8.2 阶段一 · P1-Update：只更新受影响的 Story
 
 ```text
 # Role
@@ -1250,7 +1250,7 @@ D. 顺序/指代不确定 → unresolved，不猜。
 }
 ```
 
-### 8.3 阶段二 · Curator Agent system prompt
+##### 8.3 阶段二 · Curator Agent system prompt
 
 ```text
 # Role
@@ -1307,7 +1307,7 @@ D. 顺序/指代不确定 → unresolved，不猜。
 }
 ```
 
-### 8.4 阶段三 · Workflow vs Agent 评估器 prompt
+##### 8.4 阶段三 · Workflow vs Agent 评估器 prompt
 
 ```text
 # Role
@@ -1346,7 +1346,7 @@ D. 顺序/指代不确定 → unresolved，不猜。
 }
 ```
 
-### 8.5 提示词工程检查清单
+##### 8.5 提示词工程检查清单
 
 | 检查 | 要求 |
 | --- | --- |
