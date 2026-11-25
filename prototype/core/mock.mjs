@@ -3,7 +3,7 @@ import { charLen } from './types.mjs';
 const parse = (s) => { try { return JSON.parse(s); } catch { return {}; } };
 const sentences = (raw) => String(raw ?? '').split(/[。！？；;\n]/).map((x) => x.trim()).filter((x) => charLen(x) >= 4);
 const first = (a, fallback = '未提及') => (a && a.length ? a[0] : fallback);
-const pad = (text, min = 38, max = 58) => {
+const pad = (text, min = 50, max = 68) => {
   let s = String(text ?? '').trim();
   while (charLen(s) < min) s += '，形成可复用的流程与结果';
   if (charLen(s) > max) s = [...s].slice(0, max).join('');
@@ -14,6 +14,14 @@ export function createMock(overrides = {}) {
   return async ({ tag, user }) => {
     if (overrides[tag]) return overrides[tag](parse(user));
     const input = parse(user);
+    if (tag === 'P11-merge') {
+      const ss = sentences(input.new_raw);
+      const q = ss[0] || '新增内容';
+      return {
+        operations: [{ op: 'append', target_paragraph_id: 'p_1', text: q, source_raw_ids: [], source_quotes: [q], reason: 'mock 增量追加' }],
+        unresolved: [],
+      };
+    }
     if (tag === 'P1-extract') {
       const ss = sentences(input.raw_text);
       const stories = [];
@@ -75,6 +83,7 @@ export function createMock(overrides = {}) {
       const evals = (input.evaluations ?? []).filter((e) => e.recommendation === 'use' && e.matched?.length);
       const exps = evals.slice(0, Math.min(4, Math.max(3, evals.length)));
       return {
+        strategy: { hook_level: 'L2', body_pattern: 'CAR', jd_focus: 'mock JD 焦点' },
         experiences: exps.map((e, i) => ({
           experience_id: e.experience_id,
           why: 'mock：有直接证据',
@@ -95,11 +104,13 @@ export function createMock(overrides = {}) {
         content: pad(s.slots?.workflow || s.raw_quotes?.[0] || '完成核心动作并交付结果'),
         evidence_quote: s.raw_quotes?.[0] || s.slots?.outcome || '未提及',
       }));
-      return {
+      const out = {
         experience_id: expId,
-        project_background: '该项目面向真实业务场景，由本人负责从需求分析到方案落地的完整流程，覆盖设计、执行与复盘。',
         bullets,
       };
+      if (input.config?.show_background !== false) out.project_background = '该项目面向真实业务场景，由本人负责从需求分析到方案落地的完整流程，覆盖设计、执行与复盘。';
+      if (input.config?.show_tech_stack === true) out.tech_stack = ['飞书表格：报名与打卡流程', 'Excel：数据核对与统计'];
+      return out;
     }
     if (tag === 'P7-critic') return { issues: [] };
     if (tag === 'P8-revise') return { content: input.content, applied_issue_ids: [], remaining: [] };

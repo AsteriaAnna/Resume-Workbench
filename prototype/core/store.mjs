@@ -40,6 +40,7 @@ export function createStore(root = process.env.WORKBENCH_DATA_DIR || path.join(i
     rawDir(expId) { return path.join(store.expDir(expId), 'raw'); },
     draftPath(expId) { return path.join(store.expDir(expId), 'draft.json'); },
     markdownPath(expId) { return path.join(store.expDir(expId), 'content.md'); },
+    narrativePath(expId) { return path.join(store.expDir(expId), 'narrative.md'); },
     async createExperience(input) {
       validateExperienceInput(input);
       await store.init();
@@ -109,6 +110,15 @@ export function createStore(root = process.env.WORKBENCH_DATA_DIR || path.join(i
       await fs.mkdir(store.expDir(expId), { recursive: true });
       await fs.writeFile(store.markdownPath(expId), text, 'utf8');
       return text;
+    },
+    async writeNarrative(expId, text) {
+      await fs.mkdir(store.expDir(expId), { recursive: true });
+      await fs.writeFile(store.narrativePath(expId), String(text), 'utf8');
+      return text;
+    },
+    async readNarrative(expId) {
+      try { return await fs.readFile(store.narrativePath(expId), 'utf8'); }
+      catch (e) { if (e.code === 'ENOENT') return ''; throw e; }
     },
     async readMarkdown(expId) {
       try { return await fs.readFile(store.markdownPath(expId), 'utf8'); }

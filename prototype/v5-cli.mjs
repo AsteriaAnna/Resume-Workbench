@@ -75,6 +75,38 @@ async function main() {
     if (run) return out(await pipeline.questions({ store, scope: 'resume', target: run }));
     return out({ error: '需要 --exp 或 --run' }, 2);
   }
+  if (cmd === 'ingest') {
+    const exp = arg('exp');
+    if (!exp) return out({ error: '需要 --exp' }, 2);
+    const text = await readText();
+    if (!text) return out({ error: '需要 --text 或 --text-file' }, 2);
+    const result = await pipeline.ingest({ store, llm, experienceId: exp, text });
+    return out({
+      ok: true, experience_id: exp, raw_id: result.raw.raw_id,
+      applied: result.patch.applied.length, skipped: result.patch.skipped.length,
+      unresolved: result.patch.unresolved, stories: result.derived.model.stories.length,
+      narrative: await store.readNarrative(exp),
+    });
+  }
+  if (cmd === 'narrative') {
+    const exp = arg('exp');
+    if (!exp) return out({ error: '需要 --exp' }, 2);
+    return out({ experience_id: exp, narrative: await store.readNarrative(exp), markdown: await store.readMarkdown(exp) });
+  }
+  if (cmd === 'edit-narrative') {
+    const exp = arg('exp');
+    if (!exp) return out({ error: '需要 --exp' }, 2);
+    const text = await readText();
+    if (!text) return out({ error: '需要 --text 或 --text-file' }, 2);
+    const r = await pipeline.editExperienceNarrative({ store, llm, experienceId: exp, markdown: text });
+    return out({ ok: true, experience_id: exp, stories: r.derived.model.stories.length });
+  }
+  if (cmd === 'derive') {
+    const exp = arg('exp');
+    if (!exp) return out({ error: '需要 --exp' }, 2);
+    const r = await pipeline.derive({ store, llm, experienceId: exp });
+    return out({ ok: true, experience_id: exp, stories: r.model.stories.length });
+  }
   if (cmd === 'edit') {
     const exp = arg('exp');
     if (!exp) return out({ error: '需要 --exp' }, 2);
@@ -98,7 +130,12 @@ async function main() {
   if (cmd === 'generate') {
     const jd = arg('jd') || (arg('jd-file') ? (await fs.readFile(arg('jd-file'), 'utf8')).trim() : '');
     if (!jd) return out({ error: '需要 --jd 或 --jd-file' }, 2);
-    const run = await pipeline.generate({ store, llm, jd, config: { maxExperiences: Number(arg('max-experiences', 4)) || 4, maxBulletsPerExperience: 4 } });
+    const run = await pipeline.generate({ store, llm, jd, config: {
+      maxExperiences: Number(arg('max-experiences', 4)) || 4,
+      maxBulletsPerExperience: 4,
+      show_background: !has('no-background'),
+      show_tech_stack: has('tech-stack'),
+    } });
     return out({
       ok: true, run_id: run.run_id,
       summary: {
@@ -130,10 +167,14 @@ async function main() {
         questions: '--exp <id> | --run <id>',
         answer: '--question <qid> --text <text>',
         dismiss: '--question <qid>',
-        generate: '--jd-file <path> | --jd <text>',
+        generate: '--jd-file <path> | --jd <text> [--no-background] [--tech-stack]',
         show: '--run <id>',
         inspect: '--exp <id>',
-        edit: '--exp <id> --text-file <markdown>',
+        edit: '--exp <id> --text-file <markdown>（旧 Story 结构）',
+        ingest: '--exp <id> --text-file <raw>（v6 自动合并正文 + 派生 Story，无人工确认）',
+        narrative: '--exp <id>',
+        'edit-narrative': '--exp <id> --text-file <narrative.md>',
+        derive: '--exp <id>',
         list: '',
         stats: '',
       },

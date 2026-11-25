@@ -144,6 +144,12 @@ test('A3 不接受 support=none 的假候选，零覆盖无相关 Story 时不�
   assert.equal(detectResumeCandidates({ jd: '用户访谈', library, coverage: { requirements: [] }, evaluations: evalNone }).length, 0);
   const evalAdj = [{ experience_id: 'exp_x', matched: [{ story_id: 'story_x', support: 'adjacent', jd_quote: '用户访谈' }], missing: [] }];
   assert.equal(detectResumeCandidates({ jd: '用户访谈', library, coverage: { requirements: [] }, evaluations: evalAdj, selectedStoryIds: new Set() }).length, 1);
+  const evalMissing = [{ experience_id: 'exp_x', recommendation: 'use', matched: [{ story_id: 'story_x', support: 'direct', jd_quote: '数据复盘' }], missing: [{ jd_quote: '用户访谈', reason: '有相关内容但未展开' }] }];
+  const c = detectResumeCandidates({ jd: '用户访谈', library, coverage: { requirements: [] }, evaluations: evalMissing, selectedStoryIds: new Set(['story_x']) });
+  assert.equal(c.length, 1);
+  assert.equal(c[0].basis_type, 'coverage_missing');
+  assert.equal(c[0].action, 'add_story');
+  assert.equal(c[0].target.experience_id, 'exp_x');
 });
 
 test('人工手改 Markdown 后再输入/确认，手改内容不被覆盖', async () => {
@@ -184,4 +190,26 @@ test('第二次输入带 Fragment 时融合不崩溃（回归 norm 未定义）'
   const second = await pipeline.confirmExperienceStories({ store, llm, experienceId: exp.experience_id, decisions: null });
   assert.ok(second.model.stories.some((s) => s.title === '第二版'));
   assert.ok(second.model.fragments.some((f) => f.body === '新的素材片段'));
+});
+
+test('v6 自动 ingest：无人工确认，正文追加 + Story 自动派生 + 生成', async () => {
+  const { store } = await tempStore();
+  const llm = await createLLM({ mock: true, mockCall: createMock() });
+  const raws = [raw1, raw2, raw3];
+  const exps = [];
+  for (let i = 0; i < 3; i++) {
+    const exp = await pipeline.createExperience({ store, input: { type: ['campus', 'project', 'internship'][i], name: '自动经历' + (i + 1) } });
+    const r = await pipeline.ingest({ store, llm, experienceId: exp.experience_id, text: raws[i] });
+    assert.ok(r.derived.model.stories.length >= 1);
+    assert.ok((await store.readNarrative(exp.experience_id)).includes('## 经历正文'));
+    assert.ok((await store.readMarkdown(exp.experience_id)).includes('## Story:'));
+    exps.push(exp);
+  }
+  const run = await pipeline.generate({ store, llm, jd: '负责内容运营与数据整理。', config: { maxExperiences: 4, show_background: false, show_tech_stack: true } });
+  assert.equal(run.content.experiences.length, 3);
+  assert.ok(run.content.experiences.every((e) => e.project_background === undefined));
+  assert.ok(run.content.experiences.every((e) => Array.isArray(e.tech_stack)));
+  assert.equal(run.validation.errors.length, 0);
+  assert.equal(run.plan.strategy.hook_level, 'L2');
+  assert.equal(run.plan.strategy.body_pattern, 'CAR');
 });

@@ -3,6 +3,7 @@ import { parseMarkdown, serializeMarkdown } from './markdown.mjs';
 import { extractDraft, confirmDraft } from './extract.mjs';
 import { detectExperienceCandidates, planExperienceQuestions, answerQuestion, dismissQuestion, listQuestions } from './questions.mjs';
 import { generateResume } from './generate.mjs';
+import { ingestInput, editNarrative, deriveStories } from './ingest.mjs';
 
 export async function createExperience({ store, input }) {
   return store.createExperience(input);
@@ -45,6 +46,19 @@ export async function editExperienceMarkdown({ store, experienceId, markdown }) 
   return { model, markdown: text, evidence_rev: rev };
 }
 
+export async function ingest({ store, llm, experienceId, text }) {
+  return ingestInput({ store, llm, experienceId, text });
+}
+
+export async function editExperienceNarrative({ store, llm, experienceId, markdown }) {
+  return editNarrative({ store, llm, experienceId, markdown });
+}
+
+export async function derive({ store, llm, experienceId }) {
+  const exp = await store.readExperience(experienceId);
+  return deriveStories({ store, llm, experience: exp });
+}
+
 export async function generate({ store, llm, jd, config }) {
   return generateResume({ store, llm, jd, config });
 }
@@ -65,8 +79,9 @@ export async function inspectExperience({ store, experienceId }) {
   const exp = await store.readExperience(experienceId);
   const raw = await store.listRaw(experienceId);
   const md = await store.readMarkdown(experienceId);
+  const narrative = await store.readNarrative(experienceId);
   let model = null;
   if (md) model = parseMarkdown(md, { experience_id: experienceId });
   const q = await store.loadQuestions('experience', experienceId);
-  return { experience: exp, raw, markdown: md, model, questions: q };
+  return { experience: exp, raw, markdown: md, narrative, model, questions: q };
 }

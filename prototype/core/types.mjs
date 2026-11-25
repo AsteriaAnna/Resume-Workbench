@@ -121,7 +121,7 @@ export function validateBullet(bullet, { now = false } = {}) {
   const errors = [];
   const h = charLen(bullet.hook), c = charLen(bullet.content);
   if (h < 4 || h > 12) errors.push(`hook ${h} 字（应 4-12）`);
-  if (c < 35 || c > 80) errors.push(`content ${c} 字（应 35-80）`);
+  if (c < 50 || c > 70) errors.push(`content ${c} 字（应 50-70）`);
   if (!String(bullet.story_id ?? '').startsWith('story_')) errors.push('缺 story_id');
   if (!String(bullet.evidence_quote ?? '').trim()) errors.push('缺 evidence_quote');
   if (!String(bullet.jd_quote ?? '').trim()) errors.push('缺 jd_quote');
@@ -135,8 +135,15 @@ export function validateContent(content, config = {}) {
   const exps = content?.experiences ?? [];
   if (exps.length < 3 || exps.length > (config.maxExperiences ?? 4)) errors.push(`经历数 ${exps.length}（应 3-${config.maxExperiences ?? 4}）`);
   for (const exp of exps) {
-    const bg = charLen(exp.project_background ?? '');
-    if (bg < 40 || bg > 60) errors.push(`${exp.experience_id}: 背景 ${bg} 字（应 40-60）`);
+    if (exp.project_background !== undefined && exp.project_background !== null && String(exp.project_background).trim()) {
+      const bg = charLen(exp.project_background);
+      if (bg < 40 || bg > 60) errors.push(`${exp.experience_id}: 背景 ${bg} 字（应 40-60）`);
+    }
+    if (exp.tech_stack !== undefined && exp.tech_stack !== null) {
+      const ts = Array.isArray(exp.tech_stack) ? exp.tech_stack : [exp.tech_stack];
+      if (!ts.length) errors.push(`${exp.experience_id}: tech_stack 为空`);
+      for (const x of ts) if (charLen(x) > 40) errors.push(`${exp.experience_id}: tech_stack 项过长（≤40 字）`);
+    }
     if (!Array.isArray(exp.bullets) || !exp.bullets.length) errors.push(`${exp.experience_id}: 没有 bullet`);
     if ((exp.bullets || []).length > (config.maxBulletsPerExperience ?? 4)) errors.push(`${exp.experience_id}: bullet ${exp.bullets.length} 条（应 ≤4）`);
     for (const b of exp.bullets ?? []) {

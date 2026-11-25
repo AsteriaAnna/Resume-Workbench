@@ -30,7 +30,7 @@ export function normalizeLengths(content) {
     if (charLen(bg) > 60) { exp.project_background = trimAtBoundary(bg, 60); adjustments.push({ experience_id: exp.experience_id, field: 'background', from: charLen(bg), to: charLen(exp.project_background) }); }
     for (const b of exp.bullets ?? []) {
       if (charLen(b.hook) > 12) { const old = charLen(b.hook); b.hook = trimAtBoundary(b.hook, 12); adjustments.push({ bullet_id: b.bullet_id, field: 'hook', from: old, to: charLen(b.hook) }); }
-      if (charLen(b.content) > 80) { const old = charLen(b.content); b.content = trimAtBoundary(b.content, 80); adjustments.push({ bullet_id: b.bullet_id, field: 'content', from: old, to: charLen(b.content) }); }
+      if (charLen(b.content) > 70) { const old = charLen(b.content); b.content = trimAtBoundary(b.content, 70); adjustments.push({ bullet_id: b.bullet_id, field: 'content', from: old, to: charLen(b.content) }); }
     }
   }
   return adjustments;
@@ -41,6 +41,11 @@ export async function planResume({ llm, jd, evaluations, coverage, config = {} }
   const { json } = await llm.callJSON(p.system, p.user, p);
   assert(Array.isArray(json.experiences), 'PLAN_INVALID', 'Planner 缺少 experiences');
   return {
+    strategy: {
+      hook_level: ['L1', 'L2', 'L3'].includes(json.strategy?.hook_level) ? json.strategy.hook_level : 'L2',
+      body_pattern: ['XYZ', 'CAR', 'PAR'].includes(json.strategy?.body_pattern) ? json.strategy.body_pattern : 'CAR',
+      jd_focus: String(json.strategy?.jd_focus || ''),
+    },
     experiences: json.experiences.slice(0, config.maxExperiences ?? 4).map((e) => ({
       experience_id: String(e.experience_id || ''),
       why: String(e.why || ''),
@@ -69,7 +74,7 @@ function cleanBullet(b, i, expId, stories) {
   };
 }
 
-export async function composeExperience({ llm, jd, experience, model, plan }) {
+export async function composeExperience({ llm, jd, experience, model, plan, strategy = {}, config = {} }) {
   const stories = (plan.bullets || []).map((b) => (model.stories ?? []).find((s) => s.story_id === b.story_id)).filter(Boolean);
   assert(stories.length > 0, 'COMPOSE_NO_STORY', `${experience.experience_id}: 计划没有有效 Story`);
   const leaves = leavesOf(model.stories ?? []);
@@ -80,32 +85,38 @@ export async function composeExperience({ llm, jd, experience, model, plan }) {
     model: allowed.map(storyBrief),
     plan,
     fragments: model.fragments || [],
+    strategy,
+    config,
   });
   const { json } = await llm.callJSON(p.system, p.user, p);
   const bullets = (json.bullets || []).slice(0, 4).map((b, i) => cleanBullet(b, i, experience.experience_id, allowed));
-  // 每条 bullet 的 evidence_quote 必须能在 story/raw 中找到
   for (const b of bullets) {
     const story = allowed.find((s) => s.story_id === b.story_id);
     assert(story, 'COMPOSE_STORY_MISMATCH', `${b.bullet_id}: story_id 不在计划内`);
     const hay = [model.experience?.background, ...(story.raw_quotes || []), ...Object.values(story.slots || {})].join('\n');
     assert(quoteMatch(hay, b.evidence_quote).pass, 'COMPOSE_QUOTE', `${b.bullet_id}: evidence_quote 不在 Story 中`);
   }
-  return {
+  const out = {
     experience_id: experience.experience_id,
     title: experience.name,
     type: experience.type,
-    project_background: String(json.project_background || '').trim(),
     bullets,
   };
+  if (config.show_background !== false) out.project_background = String(json.project_background || '').trim();
+  if (config.show_tech_stack === true) out.tech_stack = Array.isArray(json.tech_stack) ? json.tech_stack.map(String).filter(Boolean).slice(0, 6) : [];
+  return out;
 }
 
-export async function composeResume({ llm, jd, library, plan }) {
+export async function composeResume({ llm, jd, library, plan, config = {} }) {
   const out = [];
   for (const item of plan.experiences || []) {
     const exp = library.find((e) => e.experience_id === item.experience_id);
     if (!exp) continue;
-    try { out.push(await composeExperience({ llm, jd, experience: exp, model: exp.model, plan: item })); }
-    catch (e) { out.push({ experience_id: item.experience_id, title: exp.name, type: exp.type, project_background: '', bullets: [], error: e.message }); }
+    try {
+      out.push(await composeExperience({ llm, jd, experience: exp, model: exp.model, plan: item, strategy: plan.strategy || {}, config }));
+    } catch (e) {
+      out.push({ experience_id: item.experience_id, title: exp.name, type: exp.type, bullets: [], error: e.message });
+    }
   }
   return { experiences: out };
 }
@@ -167,7 +178,7 @@ export async function generateResume({ store, llm, jd, config = {} }) {
   const evaluations = await evaluateAll({ llm, jd, library, concurrency: config.concurrency ?? 3 });
   const coverage = aggregateCoverage({ jd, evaluations });
   const plan = await planResume({ llm, jd, evaluations, coverage, config });
-  let content = await composeResume({ llm, jd, library, plan });
+  let content = await composeResume({ llm, jd, library, plan, config });
   const validationBefore = validateGenerated({ content, library, jd });
   let issues = [...await critique({ llm, jd, content, coverage }), ...validationBefore.issues];
   let revision = null;

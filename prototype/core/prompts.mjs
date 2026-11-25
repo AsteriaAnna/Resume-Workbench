@@ -134,28 +134,62 @@ ${COMMON}
 
 # 输出
 {
+  "strategy": {
+    "hook_level": "L1|L2|L3",
+    "body_pattern": "XYZ|CAR|PAR",
+    "jd_focus": "JD 最核心考核句（≤60字）"
+  },
   "experiences": [{ "experience_id": "", "why": "", "bullets": [{ "story_id": "", "jd_quote": "", "order": 1 }], "background": { "needed": true, "cover": ["背景","目标","角色","范围"] } }],
   "global_order": ["exp_x"],
   "dropped": [{ "experience_id": "", "reason": "" }]
-}`;
+}
+
+# 策略选择
+- hook_level 全篇锁定：L1 功能直白 / L2 行业标准术语（默认）/ L3 架构与权衡；
+- body_pattern 全篇锁定：XYZ 结果先行 / CAR 卡点破局 / PAR 端到端链路；
+- 只为该 JD 选择一次，后续所有经历不得混级/混骨架。`;
   return { system, user: json({ jd, evaluations, coverage, config }), tag: 'P5-plan', maxTokens: 5000, temperature: 0.2 };
 }
 
-export function promptP6({ jd, experience, model, plan, fragments = [] }) {
+export function promptP6({ jd, experience, model, plan, fragments = [], strategy = {}, config = {} }) {
+  const hookLevel = strategy.hook_level || 'L2';
+  const bodyPattern = strategy.body_pattern || 'CAR';
   const system = `# Role
-你是简历 bullet 编译员（R6）。只基于该经历被选中的 Story 写背景 + bullet；事实/数字只能来自 Story，不得跨 Story 拼造。
+你是简历三区编译器（R6）。严格按照"项目背景区 / Hook / 正文"三区编译，事实/数字只能来自选中的 Story，不得跨 Story 拼造。
 ${COMMON}
 
-# 规则
-- project_background 40–60 字，交代背景/目标/角色/范围；
-- 每条 content 约 40 字（35–80）；hook 4–12 字；
-- 一条只讲一个核心；JD 只影响角度/措辞；
-- 禁止评价性收尾、空话、编数字；
-- 必须带 evidence_quote（来自 Story）和 jd_quote。
+# 全局策略（全篇锁定）
+- Hook 层级：${hookLevel}（L1 功能直白 / L2 行业标准术语 / L3 架构与权衡）；全篇同一水位、词性对称；
+- 正文骨架：${bodyPattern}（XYZ 结果先行 / CAR 卡点破局 / PAR 端到端链路）；全篇同一骨架；
+- JD 焦点：${strategy.jd_focus || ''}
+
+# 第一区：项目背景区（可选）
+- 仅当 config.show_background !== false 时输出 project_background；
+- 40–60 字，1–2 句；公式：[目标业务场景/痛点] + [阶段跨度与主导定位] + [产品形态与核心闭环]；
+- 只写宏观定位，不写具体 bullet 细节；不得用空洞口号。
+
+# 第二区：Hook（4–12 字符）
+- 每条 bullet 开头，概念词必须来自 Story 的真实动作/机制，不得编造；
+- 按全局 hook_level 写；禁止"闭环/赋能/矩阵/抓手/生态/全景/体系"等空词；
+- L1 用大众中文动作词；L2 用产研标准术语（可 1–3 个英文短词）；L3 点架构模式/工程边界；
+- 同一段经历的所有 Hook 必须同层级、同风格。
+
+# 第三区：正文（50–70 字）
+- 严格按全局 body_pattern 展开：
+  - XYZ：先量化结果/核心交付 → 再机制/动作 →（可选）口径；
+  - CAR：具体卡点/约束 → 方案权衡（放弃 A 选 B）→ 落地解法 → 结果；
+  - PAR：业务前提 → 输入 → 核心处理节点 → 交付输出/效率变化；
+- 单卡单点聚焦：只围绕 plan 里该条的 match_reason/主要要求展开，不要塞满六槽；
+- 正文第一句必须紧扣左侧 Hook 的概念解释，不能标题党；
+- 结尾必须落在数字、交付物或系统状态改变；禁止"体现了/确保了/保障了…能力/效果"。
+
+# 可选第三块：技术栈
+- 仅当 config.show_tech_stack === true 时输出 tech_stack；
+- 数组，每项 ≤40 字，写"技术/工具 + 用途"，不得堆名词。
 
 # 输出
-{ "experience_id": "", "project_background": "", "bullets": [{ "story_id": "", "jd_quote": "", "hook": "", "content": "", "evidence_quote": "" }] }`;
-  return { system, user: json({ jd, experience, selected_stories: model, fragments, plan }), tag: 'P6-compose', maxTokens: 4000, temperature: 0.35 };
+{ "experience_id": "", "project_background": "", "tech_stack": [], "bullets": [{ "story_id": "", "jd_quote": "", "hook": "", "content": "", "evidence_quote": "" }] }`;
+  return { system, user: json({ jd, experience, selected_stories: model, fragments, plan, strategy, config }), tag: 'P6-compose', maxTokens: 4000, temperature: 0.3 };
 }
 
 export function promptP7({ jd, content, coverage }) {
@@ -203,4 +237,35 @@ ${COMMON}
   "priority": "high|medium|low", "expected_effect": ""
 }] }`;
   return { system, user: json({ jd, resume, library, coverage, candidates }), tag: 'P10-resume-questions', maxTokens: 5000, temperature: 0.25 };
+}
+
+export function promptP11({ experience, narrative, raw, history = '' }) {
+  const system = `# Role
+你是经历库的增量合并器（P11）。输入新 raw + 已有经历正文 + 历史 raw，输出 ExperiencePatch，把新事实按时间/逻辑顺序并入正文；不要写 Story 卡片。
+${COMMON}
+
+# 规则
+1. 只能使用 raw/已有正文中的事实；不得新增数字、工具、结果、时间；
+2. 如果已被正文覆盖（重复/同义）→ 不新增；
+3. 旧正文可补充（结果/口径/动作细节）→ merge_into/replace_span 对应段落；
+4. 新事件/新阶段 → insert_before/append_after 到正确位置；
+5. 位置只依据显式时间/顺序词（之前/之后/后来）；判断不了就放 unresolved 提问，不猜；
+6. 如果已有正文为空，视为初始录入：直接把新 raw 按时间/逻辑拆成自然段，输出 operations；不要因为历史 raw 重复而拒绝；
+7. 每个 operation 必须带 source_raw_ids/source_quotes，且 quote 逐字来自 raw；
+8. 正文用自然段，按时间/逻辑顺序；不要写条目/槽位/Story 标题；
+9. 输出 patch，不要输出完整正文。
+
+# 输出
+{
+  "operations": [{
+    "op": "append_after|insert_before|insert_after|replace_span|merge_into",
+    "target_paragraph_id": "p_1",
+    "text": "组织后的自然段",
+    "source_raw_ids": ["raw_x"],
+    "source_quotes": ["逐字原话"],
+    "reason": "为什么放这里"
+  }],
+  "unresolved": [{ "reason": "", "question": "" }]
+}`;
+  return { system, user: json({ experience, narrative, new_raw: raw, history }), tag: 'P11-merge', maxTokens: 5000, temperature: 0.25 };
 }

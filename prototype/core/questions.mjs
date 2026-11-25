@@ -69,6 +69,27 @@ export function detectResumeCandidates({ jd, library, coverage, evaluations = []
         expected_effect: '补一条覆盖 JD 的 bullet',
       });
     }
+    // C 方案：有经历级锚点（R4 判 use/matched 或 missing 指向该经历）时，允许 experience 级补新 Story
+    const hasAnchor = e.recommendation === 'use' || (e.matched || []).length > 0;
+    if (!hasAnchor) continue;
+    for (const miss of e.missing || []) {
+      if (!miss.jd_quote) continue;
+      const key = exp.experience_id + '|experience|' + miss.jd_quote;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const firstStory = (exp.stories ?? []).find((s) => (s.raw_quotes || []).length || s.slots?.workflow);
+      out.push({
+        scope: 'resume',
+        basis_type: 'coverage_missing',
+        action: 'add_story',
+        target: { experience_id: exp.experience_id, story_id: '' },
+        jd_quote: miss.jd_quote,
+        basis_quote: firstStory?.raw_quotes?.[0] || exp.name,
+        missing: ['story'],
+        source: 'R4.missing+experience',
+        expected_effect: '在该经历下新增一条覆盖 JD 的 Story/bullet',
+      });
+    }
   }
   return out;
 }
