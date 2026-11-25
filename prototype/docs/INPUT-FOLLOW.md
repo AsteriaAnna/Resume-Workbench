@@ -1396,7 +1396,7 @@ D. 顺序/指代不确定 → unresolved，不猜。
 | 2026-11-25 | `4d7ea93` | INPUT-FOLLOW 收敛为 v6 单一模型；重画流程图 | 文档不再保留旧确认模型 |
 | 2026-11-25 | `c8db9d5` | v6 图片改新文件名，避免同名旧图缓存 | 文档图与内容一致 |
 | 2026-11-25 | `67c779a` | 新增两次增量输入真实 smoke | 首次 4 Story / 第二次 5 Story；无重复段落 |
-| 本次 | §15–§18 | 追加输入/增量/派生细节、15.5 两问题拆解、三阶段完整提示词、三方案实测、修改记录、核心指标、固定测试集 | 作为复测基线 |
+| 本次 | §15–§22 | 输入/增量/派生细节、15.5 两问题拆解、三阶段提示词、三方案实测、第一次/第三次记录、评价标准重定义、下一方向、参考资料 | 作为复测基线 |
 
 ---
 
@@ -1517,3 +1517,178 @@ node prototype/eval/v6-real-smoke.mjs
 - 样本小（1 段两次增量 + 3 段生成），不能当统计显著性结论；
 - Story 质量指标中 `story_admission_rate`/`over_merge`/`stability` 需人工抽样；
 - 真实 API 输出有随机性，复测需固定模型、温度、提示词版本，并记录 run id。
+
+# 19. 测试记录（第一次 / 第三次）
+
+## 19.1 第一次：两次增量输入基线
+
+| 项 | 第一次 | 第二次 |
+| --- | ---: | ---: |
+| 输入字数 | 204 | 121 |
+| P11 applied / skipped / unresolved | 1 / 0 / 0 | 1 / 0 / 0 |
+| 正文段数 | 3 | 4 |
+| Story 数 | 4 | 5 |
+| 槽位填充率 | 0.833 | 0.733 |
+| quote 命中 | 4/4 | 6/6 |
+| 重复段落 | 0 | 0 |
+
+**观察：**增量正文合并成功、无重复、事实可回查；但第二次 Story 把第一次的 3 条职责 Story 合并成 1 条，粒度不稳定；首段“担任副主席”重复。
+
+## 19.2 第三次：三方案对照
+
+| 指标 | 全量重写 | Registry + P1-Update | Curator（有界） |
+| --- | ---: | ---: | ---: |
+| 首次 Story | 4 | 4 | 4 |
+| 二次 Story | 6 | 6 | 7 |
+| 旧 Story ID 保留 | 0/4 | **4/4** | **4/4** |
+| ID Jaccard | 0 | 0.667 | 0.571 |
+| 标题 Jaccard | 0 | 0.667 | 0.571 |
+| 槽位填充 | 0.750 | 0.778 | **0.810** |
+| quote 命中 | 7/7 | 7/7 | 7/7 |
+
+**观察：**
+
+- 全量重写：旧 ID 全丢，标题全变，不能用于持续维护；
+- Registry：旧 4 条 ID 全保留，新增 2 条事件型 Story，维护性最好；
+- Curator：保留旧 ID，新增 3 条（多拆 AI 工具），但新增的 AI 工具 Story 缺 outcome，属于弱 Story。
+
+完整报告：[STORY-QUALITY-REPORT.md](./STORY-QUALITY-REPORT.md)
+
+## 19.3 第三次之后的“Story → bullet”再测试
+
+用同一批 Story，按两份 JD 做下游可用性评估（LLM judge + P6 实际生成）：
+
+| 方案 | 平均可写性 | 独立角度 | 证据强度 | strong 比例 | P6 生成（JD-01 / JD-02） |
+| --- | ---: | ---: | ---: | ---: | --- |
+| full-rewrite | 2.67 | 2.67 | 2.50 | 0.17 | 3 条 / 3 条 |
+| registry-update | 2.50 | 2.50 | 2.50 | 0.00 | 3 条 / 3 条（1 条长度错误） |
+| curator-loop | 2.71 | 2.71 | 2.29 | 0.14 | 3 条（1 错） / 3 条（2 错） |
+
+**关键发现：**
+
+- 结构指标（slot_fill、ID 稳定）与下游可用性**不是一回事**；
+- 三方案的下游可写性都只有 2.5–2.7/5，strong 比例 0–17%；
+- 真正得分高的只有“6 场分享会”“12 天打卡/飞书表格”这类**有动作 + 有结果**的 Story；
+- “主动联系老师任副主席”“公众号日常运营”“对接协调”等职责型 Story 得分 2–3；
+- “AI 工具辅助”得分 2，属技能碎片；
+- 说明：Registry/Curator 解决了“身份稳定”，但**没有解决 Story 本身是否值得写进简历**。
+
+报告：`prototype/eval/reports/story-utility-20261125134307/`（本地，未提交真实内容）
+
+---
+
+# 20. 评价标准重定义：从“填满槽位”到“能否支撑简历 bullet”
+
+## 20.1 第一性原理
+
+Story 不是最终产物，它只是中间资产。它的价值不是：
+
+- 槽位填满；
+- quote 存在；
+- ID 稳定；
+- 数量 5–8。
+
+而是：
+
+> **能否在目标 JD 下，稳定地支撑一条真实、具体、不重复、有证据的 bullet。**
+
+所以评价必须分层：
+
+| 层 | 指标 | 说明 |
+| --- | --- | --- |
+| **资产质量** | `bullet_worthiness` | 这条 Story 能否写出好 bullet |
+| | `distinct_angle` | 是否提供独立角度，不是重复另一条 |
+| | `evidence_strength` | 动作/结果/归属/范围/原话是否足够 |
+| | `admission` | strong / weak / fragment |
+| **维护质量** | ID 稳定、无孤儿、无重复、变更最小 | Registry 方案的核心价值 |
+| **下游质量** | P6 生成成功率、长度/引用合规、bullet 质量 | Story 的真实用途 |
+| **成本/可审计** | token、调用数、可回放 | 工程约束 |
+
+**结论：**
+
+- `slot_fill` 高 ≠ Story 好；
+- `ID 稳定` 只说明维护好，不说明内容值得写；
+- 以后复测必须同时看**资产质量 + 下游质量 + 维护质量**，不能只看一个。
+
+## 20.2 新的评价 rubric（建议固定）
+
+### Story 资产质量（1–5）
+
+1. **可写性**：能否针对一个 JD 写出具体 bullet；
+2. **独立角度**：是否与同经历其他 Story 不重复；
+3. **证据强度**：动作、结果、归属、范围、原话；
+4. **准入**：strong / weak / fragment；
+5. **可复用**：换一个相近 JD 是否仍能写。
+
+### 维护质量
+
+- 旧 ID 保留率；
+- ID Jaccard / 标题 Jaccard；
+- 孤儿、重复、静默删除；
+- 变更最小性（是否只改受影响内容）。
+
+### 下游质量
+
+- P6 生成成功率；
+- 长度/Hook/背景合规；
+- evidence_quote 命中；
+- 生成 bullet 的 JD 相关性/具体性（LLM judge + 人工抽样）。
+
+## 20.3 指标之外的根因
+
+这次再测试说明：
+
+1. **不是所有低分都怪 prompt**：raw 本身缺 problem/结果/口径，Story 只能写成职责；
+2. **prompt 也没把质量门槛写死**：P1/P1-Update 让“职责列表”通过准入；
+3. **评价指标之前选错了**：槽位填充/数量是过程指标，不是价值指标；
+4. **Registry 只解决维护，不解决内容质量**：身份稳定后，弱 Story 仍然是弱 Story。
+
+---
+
+# 21. 下一方向
+
+按优先级：
+
+1. **先改评价，再改 prompt**：把 `bullet_worthiness / distinct_angle / evidence_strength / admission` 作为 P1/P1-Update 的显式输出/校验字段；
+2. **P1/P1-Update 加质量门槛**：
+   - 只有职责/背景、没有结果/决策 → 不 create，进 Fragment；
+   - 有结果但缺口径 → create + 问题；
+   - 有动作+结果+归属 → strong；
+   - 加 3–5 个 few-shot：好 Story / 职责列表 / 弱结果 / 单一技能碎片；
+3. **两段式生成**：
+   - 先输出边界 + 每段“能否写 bullet”的判断；
+   - 再对 strong 段填槽位；
+4. **Registry 继续保留**：先解决维护，再解决质量；
+5. **Curator 暂不扩大**：在 Registry 上做质量 Critic，而不是先上自主 Agent；
+6. **人工 golden set**：每方案抽 5–10 条 Story，人工评 1–5，校准 LLM judge；
+7. **表达层 SOTA**：Story 至少能支撑 XYZ/CAR/PAR 之一；否则降级。
+
+---
+
+# 22. 参考资料与检索记录
+
+## 22.1 业务流程 / 增量维护
+
+- [Event Segmentation](https://pmc.ncbi.nlm.nih.gov/articles/PMC3314399/)：事件边界在子目标完成/目标变化处，事件是层级结构。
+- [Dense X Retrieval](https://ar5iv.labs.arxiv.org/html/2312.06648)：检索单元要 distinct、minimal、self-contained；proposition 太细，event-level 更适合 bullet。
+- [Shared Arrangements / Differential Dataflow](https://ar5iv.labs.arxiv.org/html/1812.02639)：增量视图维护按记录级更新、多版本状态，不整表重算。
+- [Event Sourcing + CQRS](https://pkg.go.dev/github.com/quintans/eventsourcing@v0.32.0)：raw 是事件日志，projection 需要稳定 key、幂等、可回放。
+- [ID-GraphRAG](https://dl.acm.org/doi/10.1007/978-981-92-2856-0_11)：增量知识图谱的实体对齐、稳定 ID、增量构建。
+- [LLM-assisted incremental KG fusion](https://www.sciencedirect.com/science/article/pii/S2667305326000499)：多源知识图谱的 LLM 增量融合。
+
+## 22.2 Workflow / Agent
+
+- [Anthropic: Building effective agents](https://www.anthropic.com/research/building-effective-agents)：workflow = 预定义代码路径；agent = 模型自己决定下一步；先最简单、按需增加复杂度。
+- [Workflow or Agent? A Decision Framework](https://rexblack.com/resources/writing/workflow-or-agent)：四个判断问题：步骤能否枚举、错误爆炸半径、可观测性、单位成本；earned autonomy。
+
+## 22.3 检索关键词清单
+
+- 增量/身份：incremental view maintenance、materialized view maintenance、event sourcing、CQRS、change data capture、entity resolution、identity resolution、stable identifiers、incremental knowledge graph、knowledge fusion。
+- 切分/粒度：event segmentation、narrative event chains、story segmentation、proposition-based chunking、self-contained unit。
+- 架构选择：workflow vs agent、agentic workflow、bounded agent、tool allowlist、max steps、observability、trace/replay、unit economics、earned autonomy。
+
+## 22.4 备注
+
+- 上述资料不是“简历 Story”专用研究，而是可迁移的工程/认知规范；
+- 简历领域没有统一 SOTA，最终仍需用真实 JD + 人工抽样评估；
+- LLM judge 只能做方向性对比，不能替代人工 ground truth。
