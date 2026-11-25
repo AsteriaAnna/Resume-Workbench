@@ -27,6 +27,7 @@ export function registryFromModel({ model, experience, narrative }) {
       source_paragraph_ids: paragraphIdsForQuote(narrative?.paragraphs ?? [], anchors[0] || ''),
       parent_story_id: s.parent_story_id || null,
       order: s.order ?? i + 1,
+      quality: s.quality || null,
       status: 'active',
       version: 1,
       updated_at: now(),
@@ -86,6 +87,8 @@ export function applyStoryOperations({ registry, operations, narrative, experien
     try {
       if (op.op === 'create') {
         assert(op.story && op.story.title, 'STORY_CREATE_INVALID', 'create 缺少 story.title');
+        const quality = op.quality || {};
+        assert(quality.car_possible === true && quality.par_possible === true && quality.single_topic === true && quality.bullet_worthiness === 'strong', 'STORY_QUALITY', 'create 未通过多骨架/纯度/忠实度准入');
         const anchors = Array.isArray(op.anchor_quotes) ? op.anchor_quotes : [];
         const bad = ensureQuotes(anchors, narrative);
         assert(!bad.length, 'STORY_QUOTE_INVALID', `create anchor_quotes 不在正文中: ${bad.join(' / ')}`);
@@ -107,7 +110,7 @@ export function applyStoryOperations({ registry, operations, narrative, experien
           slots: { stage: '', module: '', problem: '', workflow: '', tech_link: '', outcome: '', ...(op.story.slots || {}) },
           raw_quotes: anchors, source_paragraph_ids: op.source_paragraph_ids || [],
           parent_story_id: op.parent_story_id || null, order: reg.stories.length + 1,
-          status: 'active', version: 1, updated_at: now(), flags: [],
+          status: 'active', version: 1, updated_at: now(), flags: [], quality,
         });
         applied.push(op);
       } else if (op.op === 'update') {

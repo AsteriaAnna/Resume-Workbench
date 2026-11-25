@@ -1,16 +1,30 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createLLM } from '../core/llm.mjs';
+import { createStore } from '../core/store.mjs';
 import { charLen, quoteMatch, norm } from '../core/types.mjs';
 
 const REPORT_DIR = path.resolve(import.meta.dirname, 'reports');
-const dirs = (await fs.readdir(REPORT_DIR)).filter((x) => x.startsWith('three-schemes-')).sort();
-const srcDir = path.join(REPORT_DIR, dirs.at(-1));
-const data = JSON.parse(await fs.readFile(path.join(srcDir, 'result.json'), 'utf8'));
-const schemeName = process.argv.includes('--scheme') ? process.argv[process.argv.indexOf('--scheme') + 1] : 'registry-update';
-const scheme = data.results.find((x) => x.name === schemeName);
-if (!scheme || scheme.error) throw new Error('没有可用的方案结果: ' + schemeName);
-const stories = (scheme.second?.stories || []).map((s) => ({
+const storeArg = process.argv.includes('--store') ? process.argv[process.argv.indexOf('--store') + 1] : '';
+const expArg = process.argv.includes('--exp') ? process.argv[process.argv.indexOf('--exp') + 1] : 'exp_74645d5065a74df4';
+let schemeName, stories;
+if (storeArg) {
+  const st = await createStore(storeArg).init();
+  const reg = await st.readRegistry(expArg);
+  if (!reg) throw new Error('store 中没有 registry');
+  schemeName = 'store:' + expArg;
+  stories = reg.stories.filter((x) => x.status === 'active').map((s) => ({
+    story_id: s.story_id, title: s.title, slots: s.slots || {}, raw_quotes: s.raw_quotes || [],
+    ownership: s.ownership || '', scope: s.scope || '',
+  }));
+} else {
+  const dirs = (await fs.readdir(REPORT_DIR)).filter((x) => x.startsWith('three-schemes-')).sort();
+  const srcDir = path.join(REPORT_DIR, dirs.at(-1));
+  const data = JSON.parse(await fs.readFile(path.join(srcDir, 'result.json'), 'utf8'));
+  schemeName = process.argv.includes('--scheme') ? process.argv[process.argv.indexOf('--scheme') + 1] : 'registry-update';
+  const scheme = data.results.find((x) => x.name === schemeName);
+  if (!scheme || scheme.error) throw new Error('没有可用的方案结果: ' + schemeName);
+  stories = (scheme.second?.stories || []).map((s) => ({
   story_id: s.story_id,
   title: s.title,
   slots: s.slots || {},
@@ -18,6 +32,7 @@ const stories = (scheme.second?.stories || []).map((s) => ({
   ownership: s.ownership || '',
   scope: s.scope || '',
 }));
+}
 const DATA = path.resolve(import.meta.dirname, '..', '..', '..', '沙盒数据-真实语料-v3', 'v2', 'cards.json');
 const db = JSON.parse(await fs.readFile(DATA, 'utf8'));
 const exp = db.experiences.find((x) => x.exp_id === 'exp_74645d5065a74df4');
