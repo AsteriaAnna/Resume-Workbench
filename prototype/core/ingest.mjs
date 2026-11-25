@@ -1,8 +1,9 @@
 import { AppError, assert, now, SLOT_KEYS, validateMarkdownModel } from './types.mjs';
-import { promptP1, promptP11 } from './prompts.mjs';
+import { promptP1, promptP11, promptP1Update, promptP1Review, promptP1Repair } from './prompts.mjs';
 import { parseNarrative, serializeNarrative, narrativeText, applyPatch } from './narrative.mjs';
 import { buildModelFromDraft } from './extract.mjs';
 import { serializeMarkdown } from './markdown.mjs';
+import { registryFromModel, applyStoryOperations } from './story-registry.mjs';
 
 function storyDraftFromJson(json, experience) {
   assert(Array.isArray(json.stories), 'DERIVE_INVALID', 'P1 输出缺少 stories');
@@ -12,7 +13,7 @@ function storyDraftFromJson(json, experience) {
     experience_id: experience.experience_id,
     experienceFields: { type: experience.type, name: experience.name, role: experience.role, time: experience.time },
     created_at: now(),
-    prompt_version: 'v6.0',
+    prompt_version: 'v6.1',
     stories: (json.stories || []).map((s, i) => ({
       temp_id: String(s.temp_id || `s${i + 1}`),
       parent_temp_id: s.parent_temp_id ? String(s.parent_temp_id) : null,
@@ -37,6 +38,7 @@ export async function deriveStories({ store, llm, experience }) {
   if (!text.trim()) return { model: { experience: { ...experience }, stories: [], fragments: [] }, markdown: '' };
   const p = promptP1({ experience, raw: text, currentMarkdown: '' });
   const { json } = await llm.callJSON(p.system, p.user, p);
+  await store.debug('P1-derive', { experience_id: experience.experience_id, output: json });
   const draft = storyDraftFromJson(json, experience);
   const model = buildModelFromDraft(draft, null);
   model.experience = { experience_id: experience.experience_id, type: experience.type, name: experience.name, role: experience.role, time: experience.time };
@@ -51,7 +53,52 @@ export async function deriveStories({ store, llm, experience }) {
   return { model, markdown, draft };
 }
 
-export async function ingestInput({ store, llm, experienceId, text }) {
+export async function updateStories({ store, llm, experience, narrative, changedParagraphIds = [], mode = 'registry' }) {
+  const text = narrativeText(narrative);
+  let registry = await store.readRegistry(experience.experience_id);
+  if (!registry) {
+    const full = await deriveStories({ store, llm, experience });
+    registry = registryFromModel({ model: full.model, experience, narrative });
+    await store.writeRegistry(experience.experience_id, registry);
+    return { model: full.model, markdown: full.markdown, registry, applied: [], skipped: [], questions: [], mode: 'initial-registry' };
+  }
+  const p = promptP1Update({ experience, narrative, changedParagraphIds, registry });
+  let json;
+  try {
+    ({ json } = await llm.callJSON(p.system, p.user, p));
+  } catch (e) {
+    if (e.code !== 'LLM_JSON' || !e.details?.raw) throw e;
+    await store.debug('P1-update-invalid', { experience_id: experience.experience_id, raw: e.details.raw });
+    const rp = promptP1Repair({ raw: e.details.raw });
+    ({ json } = await llm.callJSON(rp.system, rp.user, rp));
+  }
+  await store.debug('P1-update', { experience_id: experience.experience_id, output: json, changedParagraphIds });
+  let result = applyStoryOperations({ registry, operations: json.operations || [], narrative: text, experience });
+  let applied = [...result.applied];
+  let skipped = [...result.skipped];
+  let review = null;
+  if (mode === 'curator') {
+    try {
+      const rp = promptP1Review({ experience, narrative, registry: result.registry });
+      const { json: rj } = await llm.callJSON(rp.system, rp.user, rp);
+      if (Array.isArray(rj.operations) && rj.operations.length) {
+        const rr = applyStoryOperations({ registry: result.registry, operations: rj.operations, narrative: text, experience });
+        result = rr;
+        applied.push(...rr.applied);
+        skipped.push(...rr.skipped);
+        review = { operations: rj.operations, applied: rr.applied.length, skipped: rr.skipped };
+      } else review = { operations: [], applied: 0, skipped: [] };
+    } catch (e) { review = { error: e.message }; }
+  }
+  await store.writeRegistry(experience.experience_id, result.registry);
+  await store.writeMarkdown(experience.experience_id, result.model);
+  const updated = await store.readExperience(experience.experience_id);
+  updated.derived_at = now();
+  await store.saveExperience(updated);
+  return { model: result.model, markdown: result.markdown, registry: result.registry, applied, skipped, questions: json.unresolved || [], review, mode };
+}
+
+export async function ingestInput({ store, llm, experienceId, text, mode = 'registry' }) {
   const experience = await store.readExperience(experienceId);
   assert(String(text ?? '').trim(), 'INVALID_RAW', '输入不能为空');
   const raw = await store.appendRaw(experienceId, text);
@@ -70,16 +117,19 @@ export async function ingestInput({ store, llm, experienceId, text }) {
   const next = { experience: { ...existing.experience, ...experience }, paragraphs: patch.model.paragraphs };
   await store.writeNarrative(experienceId, serializeNarrative(next));
   await store.bumpEvidence(experienceId);
-  const derived = await deriveStories({ store, llm, experience: await store.readExperience(experienceId) });
-  return { raw, patch: { applied: patch.applied, skipped: patch.skipped, unresolved: json.unresolved || [] }, narrative: next, derived };
+  const updated = await store.readExperience(experienceId);
+  let derived;
+  if (mode === 'full') derived = await deriveStories({ store, llm, experience: updated });
+  else derived = await updateStories({ store, llm, experience: updated, narrative: next, changedParagraphIds: patch.changed_paragraph_ids || [], mode });
+  return { raw, patch: { applied: patch.applied, skipped: patch.skipped, unresolved: json.unresolved || [], changed_paragraph_ids: patch.changed_paragraph_ids || [] }, narrative: next, derived };
 }
 
-export async function editNarrative({ store, llm, experienceId, markdown }) {
+export async function editNarrative({ store, llm, experienceId, markdown, mode = 'registry' }) {
   const experience = await store.readExperience(experienceId);
   const model = parseNarrative(markdown, { experience_id: experienceId });
   assert(model.experience.name || experience.name, 'INVALID_NARRATIVE', '经历缺少 name');
   await store.writeNarrative(experienceId, serializeNarrative(model));
   await store.bumpEvidence(experienceId);
-  const derived = await deriveStories({ store, llm, experience: await store.readExperience(experienceId) });
+  const derived = await updateStories({ store, llm, experience: await store.readExperience(experienceId), narrative: model, changedParagraphIds: model.paragraphs.map((p) => p.paragraph_id), mode });
   return { model, derived };
 }

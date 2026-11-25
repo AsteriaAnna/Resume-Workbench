@@ -80,7 +80,7 @@ async function main() {
     if (!exp) return out({ error: '需要 --exp' }, 2);
     const text = await readText();
     if (!text) return out({ error: '需要 --text 或 --text-file' }, 2);
-    const result = await pipeline.ingest({ store, llm, experienceId: exp, text });
+    const result = await pipeline.ingest({ store, llm, experienceId: exp, text, mode: arg('mode', 'registry') });
     return out({
       ok: true, experience_id: exp, raw_id: result.raw.raw_id,
       applied: result.patch.applied.length, skipped: result.patch.skipped.length,
@@ -98,7 +98,7 @@ async function main() {
     if (!exp) return out({ error: '需要 --exp' }, 2);
     const text = await readText();
     if (!text) return out({ error: '需要 --text 或 --text-file' }, 2);
-    const r = await pipeline.editExperienceNarrative({ store, llm, experienceId: exp, markdown: text });
+    const r = await pipeline.editExperienceNarrative({ store, llm, experienceId: exp, markdown: text, mode: arg('mode', 'registry') });
     return out({ ok: true, experience_id: exp, stories: r.derived.model.stories.length });
   }
   if (cmd === 'derive') {
@@ -171,7 +171,7 @@ async function main() {
         show: '--run <id>',
         inspect: '--exp <id>',
         edit: '--exp <id> --text-file <markdown>（旧 Story 结构）',
-        ingest: '--exp <id> --text-file <raw>（v6 自动合并正文 + 派生 Story，无人工确认）',
+        ingest: '--exp <id> --text-file <raw> [--mode full|registry|curator]（默认 registry）',
         narrative: '--exp <id>',
         'edit-narrative': '--exp <id> --text-file <narrative.md>',
         derive: '--exp <id>',

@@ -213,3 +213,20 @@ test('v6 自动 ingest：无人工确认，正文追加 + Story 自动派生 + �
   assert.equal(run.plan.strategy.hook_level, 'L2');
   assert.equal(run.plan.strategy.body_pattern, 'CAR');
 });
+
+test('registry 模式：第二次增量保留已有 Story ID，不重新编号', async () => {
+  const { store } = await tempStore();
+  const llm = await createLLM({ mock: true, mockCall: createMock() });
+  const exp = await pipeline.createExperience({ store, input: { type: 'campus', name: 'registry 增量' } });
+  const r1 = await pipeline.ingest({ store, llm, experienceId: exp.experience_id, text: raw1, mode: 'registry' });
+  const reg1 = await store.readRegistry(exp.experience_id);
+  assert.ok(reg1.stories.length >= 1);
+  const ids1 = reg1.stories.filter((s) => s.status === 'active').map((s) => s.story_id);
+  const r2 = await pipeline.ingest({ store, llm, experienceId: exp.experience_id, text: '补充：后来又把打卡流程做成模板，交给下一届同学复用。', mode: 'registry' });
+  const reg2 = await store.readRegistry(exp.experience_id);
+  const ids2 = reg2.stories.filter((s) => s.status === 'active').map((s) => s.story_id);
+  for (const id of ids1) assert.ok(ids2.includes(id), '已有 Story ID 应保留: ' + id);
+  const keys = reg2.stories.filter((s) => s.status === 'active').map((s) => s.story_key);
+  assert.equal(new Set(keys).size, keys.length);
+  assert.ok((await store.readMarkdown(exp.experience_id)).includes('## Story:'));
+});

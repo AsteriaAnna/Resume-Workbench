@@ -32,6 +32,17 @@ export function serializeNarrative(model) {
   return out.join('\n').trimEnd() + '\n';
 }
 
+export function diffParagraphs(oldModel, newModel) {
+  const oldPs = oldModel?.paragraphs || [];
+  const newPs = newModel?.paragraphs || [];
+  const changed = [];
+  for (let i = 0; i < newPs.length; i++) {
+    const old = oldPs[i];
+    if (!old || norm(old.text) !== norm(newPs[i].text)) changed.push(newPs[i].paragraph_id);
+  }
+  return { changed_paragraph_ids: changed, old_count: oldPs.length, new_count: newPs.length };
+}
+
 export function narrativeText(model) {
   return (model.paragraphs || []).map((p) => p.text).join('\n\n');
 }
@@ -64,6 +75,6 @@ export function applyPatch(model, operations, raw) {
   }
   return {
     model: { experience: model.experience, paragraphs: paragraphs.map((p, i) => ({ paragraph_id: `p_${i + 1}`, text: p.text })) },
-    applied, skipped,
+    applied, skipped, changed_paragraph_ids: diffParagraphs(model, { experience: model.experience, paragraphs: paragraphs.map((p, i) => ({ paragraph_id: `p_${i + 1}`, text: p.text })) }).changed_paragraph_ids,
   };
 }

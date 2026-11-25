@@ -2,6 +2,25 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { AppError } from './types.mjs';
 
+function repairJsonControlChars(raw) {
+  let out = '', inStr = false, esc = false;
+  for (const ch of String(raw)) {
+    if (inStr) {
+      if (esc) { out += ch; esc = false; }
+      else if (ch === '\\') { out += ch; esc = true; }
+      else if (ch === '"') { out += ch; inStr = false; }
+      else if (ch === '\n') out += '\\n';
+      else if (ch === '\r') out += '\\r';
+      else if (ch === '\t') out += '\\t';
+      else out += ch;
+    } else {
+      if (ch === '"') inStr = true;
+      out += ch;
+    }
+  }
+  return out;
+}
+
 async function loadConfig() {
   let local = {};
   try { local = JSON.parse(await fs.readFile(path.join(import.meta.dirname, '..', '.local-ai.json'), 'utf8')); } catch {}
@@ -46,7 +65,10 @@ export async function createLLM({ mock = false, mockCall = null, maxRetries = 1,
         stats.output_chars += raw.length;
         let json;
         try { json = JSON.parse(raw); }
-        catch { throw new AppError('LLM_JSON', `模型返回非 JSON（${tag}）`); }
+        catch {
+          try { json = JSON.parse(repairJsonControlChars(raw)); }
+          catch { throw new AppError('LLM_JSON', `模型返回非 JSON（${tag}）: ${raw.slice(0, 500)}`, { raw }); }
+        }
         return { json, usage: data.usage || {}, tag };
       } catch (e) {
         last = e;

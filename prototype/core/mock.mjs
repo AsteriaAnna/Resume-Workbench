@@ -46,6 +46,18 @@ export function createMock(overrides = {}) {
       }
       return { stories, fragments: [], unassigned_details: [], questions: [] };
     }
+    if (tag === 'P1-update') {
+      const reg = input.story_registry?.stories || [];
+      const active = reg.find((x) => x.status === 'active');
+      if (!active) return { operations: [], unresolved: [] };
+      const ps = input.narrative?.paragraphs || [];
+      const changed = (input.changed_paragraph_ids || []).map((id) => ps.find((p) => p.paragraph_id === id)).filter(Boolean);
+      const text = changed[changed.length - 1]?.text || ps[ps.length - 1]?.text || '';
+      if (!text) return { operations: [], unresolved: [] };
+      return { operations: [{ op: 'update', story_id: active.story_id, patch: { slots: { outcome: text } }, source_paragraph_ids: [changed[changed.length - 1]?.paragraph_id].filter(Boolean), reason: 'mock 增量补充' }], unresolved: [] };
+    }
+    if (tag === 'P1-repair') return { operations: [], unresolved: [] };
+    if (tag === 'P1-review') return { operations: [], unresolved: [] };
     if (tag === 'P2-experience-questions') {
       const stories = input.markdown_model?.stories ?? [];
       const sid = stories[0]?.story_id || 'story_0';

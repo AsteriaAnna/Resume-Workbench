@@ -46,12 +46,12 @@ export async function editExperienceMarkdown({ store, experienceId, markdown }) 
   return { model, markdown: text, evidence_rev: rev };
 }
 
-export async function ingest({ store, llm, experienceId, text }) {
-  return ingestInput({ store, llm, experienceId, text });
+export async function ingest({ store, llm, experienceId, text, mode = 'registry' }) {
+  return ingestInput({ store, llm, experienceId, text, mode });
 }
 
-export async function editExperienceNarrative({ store, llm, experienceId, markdown }) {
-  return editNarrative({ store, llm, experienceId, markdown });
+export async function editExperienceNarrative({ store, llm, experienceId, markdown, mode = 'registry' }) {
+  return editNarrative({ store, llm, experienceId, markdown, mode });
 }
 
 export async function derive({ store, llm, experienceId }) {

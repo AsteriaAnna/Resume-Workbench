@@ -269,3 +269,91 @@ ${COMMON}
 }`;
   return { system, user: json({ experience, narrative, new_raw: raw, history }), tag: 'P11-merge', maxTokens: 5000, temperature: 0.25 };
 }
+
+export function promptP1Update({ experience, narrative, changedParagraphIds, registry }) {
+  const system = `# Role
+你是 Story Registry 增量维护器（P1-Update）。不是重新生成全部 Story，而是只对变更段落做最小变更。
+${COMMON}
+
+# 输入
+- experience：经历字段；
+- narrative.paragraphs：当前正文；
+- changed_paragraph_ids：本次变化/新增的段落；
+- story_registry：已有 Story（含 story_id/story_key/status/version/source_paragraph_ids/slots）。
+
+# 决策表（按顺序，命中即停）
+1. 新证据与某 active Story 的 story_key / source_raw_quotes 匹配：
+   - 只补充结果/口径/动作细节 → update（保留 story_id）
+   - 两个可合并 → merge
+   - 一个 Story 出现 ≥2 个独立子目标/结果链 → split
+2. 无匹配 + 满足 Story 准入 → create
+3. 旧 Story 的 source_paragraph_ids 全被删/替换，且新段落无对应证据 → delete
+4. 无法判断 → unresolved，保留旧 Story，不猜。
+
+# 硬规则
+1. 已有 story_id 必须复用；不得重新编号、不得改无关 Story。
+2. 只输出发生变化的 Story；未变化的不输出。
+3. 不输出完整正文或完整 Story 列表。
+4. 新 Story 不生成 story_id/story_key，只给 anchor_quotes + source_paragraph_ids，由代码计算。
+5. 不得跨 Story 拼事实；不得新增数字/工具/结果。
+6. 能 update 不 create，能 merge 不 split；不确定保留旧 Story。
+7. 只处理 changed_paragraph_ids 涉及的内容；最多 6 个 operation。
+8. 自动应用，不要求人工确认；输出必须可审计。
+
+# Story 准入
+一个子目标/决策 + 本人动作 + 闭环结果/交付 + 自包含 + 至少 1 条 raw_quotes 逐字命中正文；否则进 fragments。
+
+# 输出（只 JSON）
+{
+  "operations": [
+    { "op": "create", "anchor_quotes": ["..."], "source_paragraph_ids": ["p_2"], "story": { "title": "", "summary": "", "ownership": "", "scope": "", "slots": {} }, "reason": "" },
+    { "op": "update", "story_id": "story_x", "patch": { "title": "", "summary": "", "ownership": "", "scope": "", "slots": {}, "raw_quotes": [] }, "source_paragraph_ids": ["p_2"], "reason": "" },
+    { "op": "merge", "story_ids": ["story_a","story_b"], "target_story_id": "story_a", "reason": "" },
+    { "op": "split", "story_id": "story_a", "parts": [{ "anchor_quotes": ["..."], "source_paragraph_ids": ["p_2"], "story": { "title": "", "slots": {} } }], "reason": "" },
+    { "op": "delete", "story_id": "story_x", "reason": "" }
+  ],
+  "unresolved": [{ "reason": "", "question": "" }]
+}`;
+  return { system, user: json({ experience, narrative, changed_paragraph_ids: changedParagraphIds, story_registry: registry }), tag: 'P1-update', maxTokens: 12000, temperature: 0 };
+}
+
+export function promptP1Review({ experience, narrative, registry }) {
+  const system = `# Role
+你是 Story Registry 审查器（P1-Review）。只检查当前 registry 的质量问题，不重写全部 Story。
+${COMMON}
+
+# 只处理三类问题
+1. 过度合并：一条 Story 含 ≥3 类独立动作/职责 → split 或 update 缩窄；
+2. 任务列表当 Story：只有职责/动作、没有闭环结果/决策 → delete 或 update 为 Fragment 语义；
+3. 重复 Story：同一事实/同一 story_key 多个 active → merge。
+
+# 规则
+- 不新增事实；不重命名无关 Story；不重新编号；
+- 只输出必要的 update/split/merge/delete，最多 3 个 operation；
+- 每个 operation 必须引用 story_id 和依据 quote；
+- 没有问题就返回空 operations。
+
+# 输出
+{ "operations": [
+  { "op": "update", "story_id": "", "patch": { "title": "", "slots": {} }, "reason": "" },
+  { "op": "split", "story_id": "", "parts": [{ "anchor_quotes": ["..."], "source_paragraph_ids": [], "story": { "title": "", "slots": {} } }], "reason": "" },
+  { "op": "merge", "story_ids": [], "target_story_id": "", "reason": "" },
+  { "op": "delete", "story_id": "", "reason": "" }
+], "unresolved": [] }`;
+  return { system, user: json({ experience, narrative, story_registry: registry }), tag: 'P1-review', maxTokens: 3000, temperature: 0 };
+}
+
+export function promptP1Repair({ raw }) {
+  const system = `# Role
+你是 JSON 修复器。输入是一段不合法但意图明确的 P1-Update 输出。只修复 JSON 语法，不要增删 operation，不要改写字段内容。
+
+# 规则
+- 输出合法 JSON；
+- 保留所有已有 operation；
+- 缺的括号补齐，截断的 operation 删除；
+- 不加解释。
+
+# 输出
+{ "operations": [], "unresolved": [] }`;
+  return { system, user: json({ invalid_json: raw }), tag: 'P1-repair', maxTokens: 4000, temperature: 0 };
+}
