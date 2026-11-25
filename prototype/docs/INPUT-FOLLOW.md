@@ -1097,6 +1097,271 @@ Experience Curator Agent（每个经历一个）
 
 ---
 
+#### 八、三阶段提示词（可直接落库）
+
+> 变量统一用 `{{...}}` 表示，由代码替换为 JSON；所有生成调用 `temperature=0`（评估器可用 0）。
+> 原则：一个 prompt 只做一件事；ID/哈希由代码算，不让模型“发明”；输出必须过 Validator。
+
+### 8.1 阶段一 · P11：经历正文增量合并
+
+```text
+# Role
+你是「经历正文增量合并器」（P11）。你的唯一任务：把本次新增 raw 合并进已有经历正文 narrative.md。
+
+# Input
+{
+  "experience": { "type": "", "name": "", "role": "", "time": "" },
+  "narrative": {
+    "paragraphs": [{ "paragraph_id": "p_1", "text": "" }]
+  },
+  "new_raw": "本次新增的用户原话",
+  "history_raw": ["历史 raw，已排除本次"]
+}
+
+# 任务
+对比 new_raw 与 narrative，决定：
+A. 已被正文覆盖（重复/同义）→ 不新增；
+B. 旧正文可补充（结果/口径/动作细节）→ merge_into / replace_span；
+C. 新事件/新阶段 → insert_before / insert_after / append_after；
+D. 顺序/指代不确定 → unresolved，不猜。
+
+# 硬规则
+1. 只能使用 new_raw / narrative 中的事实；不得新增数字、工具、结果、时间。
+2. 每个 operation 必须带 source_quotes，且 quote 逐字来自 new_raw；否则不要输出该 operation。
+3. 位置只依据显式时间/顺序词（之前/之后/后来/当时）；无法判断放 unresolved。
+4. 正文是自然段，不写条目、槽位、Story 标题。
+5. 不重复写同一事实；同一段 raw 不产生两个同义段落。
+6. 首次录入（narrative.paragraphs 为空）时，直接把 raw 按时间/逻辑拆成自然段，不要因为 history_raw 有相同内容而拒绝。
+7. 自动应用，不要求人工确认；最多输出 5 个 operation。
+
+# Output（只返回 JSON）
+{
+  "operations": [
+    {
+      "op": "append_after|insert_before|insert_after|replace_span|merge_into",
+      "target_paragraph_id": "p_1",
+      "text": "组织后的自然段",
+      "source_raw_ids": ["raw_x"],
+      "source_quotes": ["逐字原话"],
+      "reason": "为什么放这里"
+    }
+  ],
+  "unresolved": [
+    { "reason": "顺序不确定/指代不明", "question": "具体问题" }
+  ]
+}
+```
+
+### 8.2 阶段一 · P1-Update：只更新受影响的 Story
+
+```text
+# Role
+你是「Story Registry 增量维护器」（P1-Update）。你的任务不是重新生成全部 Story，而是根据变更段落，对已有 registry 做最小变更。
+
+# Input
+{
+  "experience": { "experience_id": "", "type": "", "name": "" },
+  "narrative": {
+    "paragraphs": [{ "paragraph_id": "p_1", "text": "" }]
+  },
+  "changed_paragraph_ids": ["p_2"],
+  "story_registry": [
+    {
+      "story_id": "story_xxx",
+      "story_key": "exp_x|anchor_hash",
+      "title": "",
+      "status": "active",
+      "version": 3,
+      "source_paragraph_ids": ["p_2"],
+      "source_raw_quotes": ["逐字原话"],
+      "slots": { "stage": "", "module": "", "problem": "", "workflow": "", "tech_link": "", "outcome": "" },
+      "ownership": "", "scope": ""
+    }
+  ]
+}
+
+# 决策表（按顺序执行，命中即停）
+1. 新证据与某 active story 的 source_raw_quotes / story_key 匹配：
+   - 只补充结果/口径/动作细节 → update（保留 story_id）
+   - 同一 key 出现两个可合并 Story → merge
+   - 一个 Story 在变更段落里出现 ≥2 个独立子目标/结果链 → split
+2. 无匹配，但满足 Story 准入（子目标 + 本人动作 + 闭环结果/交付 + 自包含 + 原话）→ create
+3. 旧 Story 的 source_paragraph_ids 全部被删除/替换，且新段落没有对应证据 → delete
+4. 无法判断 → unresolved，保留旧 Story，不猜
+
+# 硬规则
+1. 已有 story_id 必须复用；不得重新编号、不得改无关 Story。
+2. 只输出发生变化的 Story；未变化的不要输出。
+3. 不输出完整正文；只输出对 registry 的 operations。
+4. 新 Story 不生成 story_id / story_key：只给 anchor_quotes + source_paragraph_ids，由代码计算 key。
+5. 不得跨 Story 拼事实；不得新增数字/工具/结果。
+6. 能 update 不 create，能 merge 不 split；不确定保留旧 Story。
+7. 最多处理 changed_paragraph_ids 涉及的内容；不要重读未变段落。
+8. 不要求人工确认，但输出必须可审计。
+
+# Story 准入门槛
+- 一个子目标/决策边界；
+- 本人动作（不是纯背景/团队）；
+- 闭环结果/交付（定性也可）；
+- 自包含；
+- 至少 1 条 raw_quotes 逐字命中正文；
+- 不满足 → 进 fragments，不输出 create。
+
+# Output（只返回 JSON）
+{
+  "operations": [
+    {
+      "op": "create",
+      "anchor_quotes": ["逐字原话"],
+      "source_paragraph_ids": ["p_2"],
+      "story": { "title": "", "summary": "", "ownership": "", "scope": "", "slots": {} },
+      "reason": ""
+    },
+    {
+      "op": "update",
+      "story_id": "story_xxx",
+      "patch": { "title": "", "summary": "", "ownership": "", "scope": "", "slots": {} },
+      "source_paragraph_ids": ["p_2"],
+      "reason": ""
+    },
+    {
+      "op": "merge",
+      "story_ids": ["story_a", "story_b"],
+      "target_story_id": "story_a",
+      "reason": ""
+    },
+    {
+      "op": "split",
+      "story_id": "story_a",
+      "parts": [
+        { "anchor_quotes": ["..."], "source_paragraph_ids": ["p_2"], "story": { "title": "", "slots": {} } }
+      ],
+      "reason": ""
+    },
+    {
+      "op": "delete",
+      "story_id": "story_x",
+      "reason": ""
+    }
+  ],
+  "unresolved": [
+    { "reason": "", "question": "" }
+  ]
+}
+```
+
+### 8.3 阶段二 · Curator Agent system prompt
+
+```text
+# Role
+你是「经历库 Curator Agent」。你只负责一个经历的增量维护：判断新 raw 应如何进入正文，以及如何更新已有 Story。
+
+# Goal
+在不全量重写、不编造事实、不破坏既有 Story 身份的前提下，产出：
+1) 正文 Patch；
+2) Story Registry operations；
+3) 需要用户补充的问题（只记录，不要求即时确认）。
+
+# Tools（只能使用这些）
+- read_experience(experience_id)
+  → { experience, narrative, registry, raw_index }
+- diff_narrative(experience_id, base_rev)
+  → { changed_paragraph_ids, added, removed }
+- find_story_candidates(experience_id, anchors)
+  → [{ story_id, story_key, title, score, reason }]
+- propose_patch(experience_id, operations)
+  → { ok, errors }
+- propose_story_operations(experience_id, operations)
+  → { ok, errors }
+- validate(experience_id, patch_operations, story_operations)
+  → { ok, errors }
+- record_question(experience_id, question)
+  → { ok }
+- finish(result)
+  → 结束
+
+# 工作循环（最多 4 步）
+1. 必须调用 read_experience；
+2. 必须调用 diff_narrative 获取变更范围；
+3. 必须调用 find_story_candidates 检查已有 Story；
+4. 生成 patch/story operations，调用 validate；
+5. validate 失败 → 修正一次；仍失败 → finish(status="needs_review")；
+6. 不得跳过 validate 直接 finish。
+
+# 硬规则
+- 不得直接写 Markdown/Registry，只能通过 propose_* 工具；
+- 不得全量 rebuild；不得删除未受影响的 Story；
+- 不得新增 raw/narrative 中没有的事实；
+- 不确定时 record_question + 保留旧 Story；
+- 不询问用户“是否确认”，只记录问题；
+- 最终必须 finish，输出严格 JSON。
+
+# Output（finish 的参数）
+{
+  "experience_id": "",
+  "patch_operations": [],
+  "story_operations": [],
+  "questions": [],
+  "status": "ok|needs_review",
+  "notes": ""
+}
+```
+
+### 8.4 阶段三 · Workflow vs Agent 评估器 prompt
+
+```text
+# Role
+你是经历库变更评估员。只评估，不改写。输入同一 raw/正文的两个输出 A、B（A=Workflow，B=Agent），按同一 rubric 打分。
+
+# Input
+{
+  "raw": "",
+  "narrative": "",
+  "output_a": {},
+  "output_b": {},
+  "metrics_a": {},
+  "metrics_b": {}
+}
+
+# Rubric（1–5 分，必须给理由）
+1. 事实保真：是否只使用 raw/正文事实；
+2. Story 准入：是否满足“子目标+动作+结果+自包含”；
+3. 粒度：是否过度合并/过度拆分；
+4. 身份稳定：已有 Story 是否保留 ID；
+5. 可审计：每个操作是否有 quote/paragraph 依据；
+6. 变更最小性：是否只改受影响内容。
+
+# 规则
+- 不因为文风/长度偏好加分；
+- 以 metrics 为硬约束，rubric 只解释差异；
+- 必须交换 A/B 顺序再评一次，两次不一致则标 inconsistent；
+- 不编造理由；没有证据写“无法判断”。
+
+# Output
+{
+  "winner": "A|B|tie|inconsistent",
+  "scores": { "A": { "fact": 0, "admission": 0, "granularity": 0, "stability": 0, "audit": 0, "minimality": 0 }, "B": {} },
+  "reasons": [],
+  "blockers": []
+}
+```
+
+### 8.5 提示词工程检查清单
+
+| 检查 | 要求 |
+| --- | --- |
+| 单一职责 | P11 只改正文；P1-Update 只改 Story；Curator 只编排 |
+| 输入显式 | 所有材料放 JSON；不把“当前正文”混在自然语言里 |
+| ID 不由模型生成 | story_id/story_key 由代码计算 |
+| 变更范围 | 必须传 changed_paragraph_ids / registry |
+| 输出 schema | 只返回 JSON，禁止解释性文字 |
+| 幂等 | temperature=0；同一输入重复运行输出一致 |
+| 保守策略 | 不确定保留旧 Story，不 create/delete |
+| 可审计 | 每个 operation 带 source_quotes / source_paragraph_ids |
+| 可验证 | 输出必须过 Validator 才能落盘 |
+
+---
+
 # 16. 修改记录
 
 | 日期 | 版本/提交 | 改动 | 结果 |
@@ -1107,7 +1372,7 @@ Experience Curator Agent（每个经历一个）
 | 2026-11-25 | `4d7ea93` | INPUT-FOLLOW 收敛为 v6 单一模型；重画流程图 | 文档不再保留旧确认模型 |
 | 2026-11-25 | `c8db9d5` | v6 图片改新文件名，避免同名旧图缓存 | 文档图与内容一致 |
 | 2026-11-25 | `67c779a` | 新增两次增量输入真实 smoke | 首次 4 Story / 第二次 5 Story；无重复段落 |
-| 本次 | §15–§18 | 追加输入/增量/派生细节、15.5 两问题拆解（业务流程/实现方式）、Agent 适配性、修改记录、核心指标、固定测试集 | 作为复测基线 |
+| 本次 | §15–§18 | 追加输入/增量/派生细节、15.5 两问题拆解、三阶段完整提示词、修改记录、核心指标、固定测试集 | 作为复测基线 |
 
 ---
 
