@@ -28,9 +28,13 @@ Story = 一个子目标/决策边界 + 本人动作 + 闭环结果/交付 + 自�
 - 同一决策的原因/参数微调合并到同一 Story；不同子目标不得硬合；
 - 没有明确时间就不写时间；顺序按原文/文档；
 - 不设固定卡片数量目标，按事件边界自然切，不要为凑数拆碎、也不要为省事合并；
-- 准入必须同时满足：CAR 可写（有具体卡点/权衡）、PAR 可写（有输入→处理→输出）、single_topic=true、bullet_worthiness=strong、raw_quotes 可逐字回查；否则放 fragments，不 create；
-- problem=未提及 通常意味着 CAR 不可写；除非能从正文明确看出真实权衡，否则不要 create；
-- 职责列表、角色/荣誉、技能碎片、只有动作没有结果 → fragments；
+- Story 准入（任一骨架即可，不是三个都满足）：
+  1. XYZ：有动作 + 闭环结果/交付；
+  2. CAR：有具体卡点/权衡/决策；
+  3. PAR：有可拆的输入→处理→输出流程；
+  至少满足一种，且 single_topic=true、raw_quotes 可逐字回查 → create；一个都不满足才进 fragments；
+- Hook/L2 是编译层产物，不在 Story 准入里判断；不要求 Story 自带 Hook；
+- 职责列表、角色/荣誉、技能碎片、只有动作没有结果/流程 → fragments；
 - 父/子层级可选：仅当总目标跨多个独立子目标时，父节点做总述，子节点做细节；最大深度 2；否则平铺；
 - 所有 raw 信息必须归入 Story/Fragment，unassigned_details 必须为空；非空就是失败。
 
@@ -48,13 +52,9 @@ Story = 一个子目标/决策边界 + 本人动作 + 闭环结果/交付 + 自�
     "raw_quotes": ["逐字原话1-3句"],
     "boundary_reason": "为什么在这里切",
     "flags": ["missing_metric|vague_ownership|possible_duplicate|missing_outcome"],
-    "quality": {
-      "car_possible": true,
-      "par_possible": true,
-      "single_topic": true,
-      "bullet_worthiness": "strong|weak|fragment",
-      "reason": "为什么能/不能同时支撑 CAR 与 PAR"
-    }
+    "projection_fit": ["XYZ|CAR|PAR"],
+    "single_topic": true,
+    "quality_reason": "说明它能支撑哪种骨架，以及为什么"
   }],
   "fragments": [{ "temp_id": "f1", "body": "不能成为 Story 的细节/背景", "reason": "为什么" }],
   "unassigned_details": [],
@@ -306,22 +306,23 @@ ${COMMON}
 4. 新 Story 不生成 story_id/story_key，只给 anchor_quotes + source_paragraph_ids，由代码计算。
 5. 不得跨 Story 拼事实；不得新增数字/工具/结果。
 6. 能 update 不 create，能 merge 不 split；不确定保留旧 Story。
+7. projection_fit / single_topic / quality_reason 必须放在 operation 顶层；不要放进 story 对象。
 7. 只处理 changed_paragraph_ids 涉及的内容；最多 6 个 operation。
 8. 自动应用，不要求人工确认；输出必须可审计。
 
-# Story 准入（硬门槛）
-必须同时满足：
-1. CAR 可写（具体卡点/权衡）；
-2. PAR 可写（输入→处理→输出）；
-3. single_topic=true（只围绕一个核心决策/子问题）；
-4. bullet_worthiness=strong；
-5. 至少 1 条 raw_quotes 逐字命中正文。
-任一不满足 → fragments，不 create。
+# Story 准入（任一骨架即可，不是三个都满足）
+至少满足一种：
+1. XYZ：动作 + 闭环结果/交付；
+2. CAR：具体卡点/权衡/决策；
+3. PAR：输入→处理→输出流程。
+同时满足：single_topic=true；至少 1 条 raw_quotes 逐字命中正文。
+Hook/L2 不在 Story 准入判断。
+一个骨架都不满足 → fragments，不 create。
 
 # 输出（只 JSON）
 {
   "operations": [
-    { "op": "create", "anchor_quotes": ["..."], "source_paragraph_ids": ["p_2"], "story": { "title": "", "summary": "", "ownership": "", "scope": "", "slots": {} }, "quality": { "car_possible": true, "par_possible": true, "single_topic": true, "bullet_worthiness": "strong", "reason": "" }, "reason": "" },
+    { "op": "create", "anchor_quotes": ["..."], "source_paragraph_ids": ["p_2"], "story": { "title": "", "summary": "", "ownership": "", "scope": "", "slots": {} }, "projection_fit": ["XYZ|CAR|PAR"], "single_topic": true, "quality_reason": "", "reason": "" },
     { "op": "update", "story_id": "story_x", "patch": { "title": "", "summary": "", "ownership": "", "scope": "", "slots": {}, "raw_quotes": [] }, "source_paragraph_ids": ["p_2"], "reason": "" },
     { "op": "merge", "story_ids": ["story_a","story_b"], "target_story_id": "story_a", "reason": "" },
     { "op": "split", "story_id": "story_a", "parts": [{ "anchor_quotes": ["..."], "source_paragraph_ids": ["p_2"], "story": { "title": "", "slots": {} } }], "reason": "" },

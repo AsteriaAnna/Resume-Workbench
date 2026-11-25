@@ -1386,58 +1386,59 @@ D. 顺序/指代不确定 → unresolved，不猜。
 完整报告：[STORY-QUALITY-REPORT.md](./STORY-QUALITY-REPORT.md)
 
 
-#### 十、准入标准替换与复测（2026-11-25）
+#### 十、准入标准（已更正：OR，不是 AND）
 
-**决策（已写进 P1 / P1-Update）：**
+**此前错误：** 把“多骨架 + 纯度 + 忠实度”当成 create 的 AND 条件，导致 Story 从 4→5 被压到 1→2，且把 Hook/L2 也错误地放进了 Story 准入。
 
-Story 不再按“有动作 + 有结果”就 create，必须同时满足：
+**更正后的准入：**
 
-1. `car_possible = true`：有具体卡点/权衡，能写 CAR；
-2. `par_possible = true`：有输入→处理→输出，能写 PAR；
-3. `single_topic = true`：只围绕一个核心决策/子问题；
-4. `bullet_worthness = "strong"`：能支撑一条具体 bullet；
-5. `raw_quotes` 逐字可回查。
+Story 是素材，不是最终 bullet；CAR/PAR/XYZ 是输出骨架，Story 只要能支撑**至少一种**即可 create。
 
-任一不满足 → **Fragment，不 create**。这是硬门槛，不是评分。
+create 条件：
+
+1. `projection_fit` 至少包含 **XYZ / CAR / PAR 之一**；
+2. `single_topic = true`（单主题）；
+3. `raw_quotes` 逐字可回查；
+4. 不要求 Hook/L2；不要求同时支撑三种骨架；不要求 bullet_worthiness=strong。
+
+不满足以上 → Fragment，不 create。
 
 **代码落点：**
 
-- `promptP1` / `promptP1Update` 输出 `quality` 字段并写入硬规则；
-- `ingest.storyDraftFromJson` 读取 quality，未通过直接转 Fragment；
-- `story-registry.applyStoryOperations` 对 `create` 再校验一次 quality；
-- 测试：mock/registry 仍通过，真实两次输入从 **4 → 5 条** 降到 **1 → 2 条**。
+- P1/P1-U 输出 `projection_fit` / `single_topic` / `quality_reason`；
+- `ingest` 按 OR 过滤；
+- `story-registry.create` 按 OR 校验；
+- 嵌套在 `story.projection_fit` 也兼容读取；
+- 测试：mock/registry 通过。
 
-**复测结果（真实数据，两次输入）：**
+**复测（真实两次输入）：**
 
 | 项 | 第一次 | 第二次 |
 | --- | ---: | ---: |
-| Story 数 | 1 | 2 |
-| 槽位填充 | 0.833 | 0.833 |
-| quote 命中 | 2/2 | 3/3 |
+| Story 数 | 4 | 6 |
+| 槽位填充 | 0.833 | 0.806 |
+| quote 命中 | 5/5 | 8/8 |
 
-说明：粗筛明显变严，职责/弱结果/技能碎片被拦在 Fragment；剩下的 Story 数量少，但不再“什么都能进”。
+第二次新增两条：6 场保研分享会、12 天单词活动；旧 4 条保留。  
+说明 OR 准入符合需求：**任一骨架即可，不要求三种全满足。**
 
-**对剩下 2 条跑三指标：**
+**对第二次 6 条跑三指标：**
 
 | 指标 | 结果 |
-| --- | --- |
-| 多骨架 | **0/2** |
-| 纯度 | 2/2 |
-| 忠实度 | 2/2 |
+| --- | ---: |
+| 多骨架 | **0/6** |
+| 纯度 | **6/6** |
+| 忠实度 | **3/6** |
 
 明细：
 
-- 两条都能写 CAR 和 PAR，且信息焦点不同（说明“多骨架”本身成立）；
-- 但 L2 Hook 仍是“破局实践”“链路闭环”“打卡流程设计”这类泛词，**没达到 L2**；
-- 纯度、忠实度通过（没有编造数字/工具）。
+- 多数 CAR 为 null（没有 problem/权衡）；
+- 有 CAR/PAR 的，Hook 仍是“破局实践/流程卡点/运营SOP”等，达不到 L2；
+- 忠实度失败集中在“推断性补充”（如“先定问卷再串流程避免返工”“放弃通用工具”）和工具归属；
+- 其中“活动宣传与材料制作”两项骨架判定通过，但正文长度/evidence 检查未通过，导致多骨架仍判 Fail；
+- 结论：**准入已正确，输出质量瓶颈转移到编译层（L2 术语 + 推断控制 + 长度/引用）**。
 
-**定位：**
-
-- 多骨架失败已从“CAR 写不出来”变成“L2 Hook 达不到”；
-- 这是**编译层提示词/术语映射**的问题，不是 Story 准入的问题；
-- 下一步需要 L2 术语表 + few-shot，而不是继续放低准入。
-
-报告：`prototype/eval/reports/story-projection-20261125142257/`（本地）
+报告：`prototype/eval/reports/story-projection-20261125142809/`（本地）
 
 # 16. 修改记录
 
@@ -1581,7 +1582,7 @@ Story 不再按“有动作 + 有结果”就 create，必须同时满足：
 | full-rewrite | 6 | 0/6 | 6/6 | 3/6 |
 | registry-update | 6 | 0/6 | 6/6 | 1/6 |
 | curator-loop | 7 | 0/7 | 7/7 | 2/7 |
-| quality-gated registry | 2 | 0/2 | 2/2 | 2/2 |
+| quality-gated registry（OR 准入） | 6 | 0/6 | 6/6 | 3/6 |
 
 **解读：**
 
@@ -1599,6 +1600,8 @@ Story 不再按“有动作 + 有结果”就 create，必须同时满足：
 3. 忠实度 Pass；
 
 才允许作为“优质卡”进入选材。
+
+> 注意：这是**输出质量验收**，不是 Story create 的门槛。create 只需 `projection_fit` 任一骨架 + 单主题 + quote 可回查，见 15.5.1 十。
 
 否则：
 

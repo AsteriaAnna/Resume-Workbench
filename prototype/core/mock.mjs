@@ -41,7 +41,7 @@ export function createMock(overrides = {}) {
             tech_link: '未提及',
             outcome: outcome,
           },
-          raw_quotes: [sentence], boundary_reason: '出现新的子目标/动作与结果', flags: [], quality: { car_possible: true, par_possible: true, single_topic: true, bullet_worthiness: 'strong', reason: 'mock' },
+          raw_quotes: [sentence], boundary_reason: '出现新的子目标/动作与结果', flags: [], projection_fit: ['CAR','PAR'], single_topic: true, quality_reason: 'mock'
         });
       }
       return { stories, fragments: [], unassigned_details: [], questions: [] };

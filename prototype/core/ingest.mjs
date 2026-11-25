@@ -26,7 +26,9 @@ function storyDraftFromJson(json, experience) {
       raw_quotes: Array.isArray(s.raw_quotes) ? s.raw_quotes.map(String).filter(Boolean) : [],
       boundary_reason: String(s.boundary_reason || ''),
       flags: Array.isArray(s.flags) ? s.flags : [],
-      quality: s.quality && typeof s.quality === 'object' ? s.quality : { car_possible: false, par_possible: false, single_topic: false, bullet_worthiness: 'fragment', reason: 'P1 未输出 quality' },
+      projection_fit: Array.isArray(s.projection_fit) ? s.projection_fit.filter((x) => ['XYZ','CAR','PAR'].includes(x)) : [],
+      single_topic: s.single_topic !== false,
+      quality_reason: String(s.quality_reason || ''),
     })),
     fragments: (json.fragments || []).map((f, i) => ({ temp_id: String(f.temp_id || `f${i + 1}`), body: String(f.body || ''), reason: String(f.reason || '') })).filter((f) => f.body),
     questions: Array.isArray(json.questions) ? json.questions : [],
@@ -41,12 +43,12 @@ export async function deriveStories({ store, llm, experience }) {
   const { json } = await llm.callJSON(p.system, p.user, p);
   await store.debug('P1-derive', { experience_id: experience.experience_id, output: json });
   const draft = storyDraftFromJson(json, experience);
-  const passQ = (q) => q && q.car_possible === true && q.par_possible === true && q.single_topic === true && q.bullet_worthiness === 'strong';
+  const passQ = (s) => Array.isArray(s.projection_fit) && s.projection_fit.length > 0 && s.single_topic === true;
   const rejected = [];
   draft.stories = draft.stories.filter((s) => {
-    if (passQ(s.quality)) return true;
-    rejected.push({ temp_id: s.temp_id, title: s.title, quality: s.quality });
-    draft.fragments.push({ temp_id: s.temp_id, body: `${s.title}：${s.raw_quotes?.join(' / ') || ''}`, reason: `准入失败：${s.quality?.reason || '未通过多骨架/纯度/忠实度'}` });
+    if (passQ(s)) return true;
+    rejected.push({ temp_id: s.temp_id, title: s.title, projection_fit: s.projection_fit, single_topic: s.single_topic });
+    draft.fragments.push({ temp_id: s.temp_id, body: `${s.title}：${s.raw_quotes?.join(' / ') || ''}`, reason: `准入失败：${s.quality_reason || '无法支撑任一骨架或非单主题'}` });
     return false;
   });
   await store.debug('P1-admission', { experience_id: experience.experience_id, accepted: draft.stories.length, rejected });

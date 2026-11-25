@@ -27,7 +27,9 @@ export function registryFromModel({ model, experience, narrative }) {
       source_paragraph_ids: paragraphIdsForQuote(narrative?.paragraphs ?? [], anchors[0] || ''),
       parent_story_id: s.parent_story_id || null,
       order: s.order ?? i + 1,
-      quality: s.quality || null,
+      projection_fit: s.projection_fit || [],
+      single_topic: s.single_topic !== false,
+      quality_reason: s.quality_reason || '',
       status: 'active',
       version: 1,
       updated_at: now(),
@@ -87,8 +89,10 @@ export function applyStoryOperations({ registry, operations, narrative, experien
     try {
       if (op.op === 'create') {
         assert(op.story && op.story.title, 'STORY_CREATE_INVALID', 'create 缺少 story.title');
-        const quality = op.quality || {};
-        assert(quality.car_possible === true && quality.par_possible === true && quality.single_topic === true && quality.bullet_worthiness === 'strong', 'STORY_QUALITY', 'create 未通过多骨架/纯度/忠实度准入');
+        const projectionFitRaw = Array.isArray(op.projection_fit) ? op.projection_fit : (Array.isArray(op.story?.projection_fit) ? op.story.projection_fit : []);
+        const projectionFit = projectionFitRaw.filter((x) => ['XYZ','CAR','PAR'].includes(x));
+        assert(projectionFit.length > 0, 'STORY_QUALITY', 'create 无法支撑任一骨架（XYZ/CAR/PAR）');
+        assert((op.single_topic ?? op.story?.single_topic) !== false, 'STORY_QUALITY', 'create 必须是单主题');
         const anchors = Array.isArray(op.anchor_quotes) ? op.anchor_quotes : [];
         const bad = ensureQuotes(anchors, narrative);
         assert(!bad.length, 'STORY_QUOTE_INVALID', `create anchor_quotes 不在正文中: ${bad.join(' / ')}`);
@@ -110,7 +114,7 @@ export function applyStoryOperations({ registry, operations, narrative, experien
           slots: { stage: '', module: '', problem: '', workflow: '', tech_link: '', outcome: '', ...(op.story.slots || {}) },
           raw_quotes: anchors, source_paragraph_ids: op.source_paragraph_ids || [],
           parent_story_id: op.parent_story_id || null, order: reg.stories.length + 1,
-          status: 'active', version: 1, updated_at: now(), flags: [], quality,
+          status: 'active', version: 1, updated_at: now(), flags: [], projection_fit: projectionFit, single_topic: (op.single_topic ?? op.story?.single_topic) !== false, quality_reason: String(op.quality_reason || op.story?.quality_reason || ''),
         });
         applied.push(op);
       } else if (op.op === 'update') {
