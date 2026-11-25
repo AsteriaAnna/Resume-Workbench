@@ -760,7 +760,7 @@ Story 字段：
 
 > 本节回答：当前“输入 → 增量 → 派生 Story”为什么会出现结构漂移；这不是单个 prompt 措辞问题，而是**数据模型 + 派生机制**的问题。
 
-### 15.5.1 现状、根因、资料结论与解决方案
+### 15.5.1 现状、根因、资料、业务流程与实现方式
 
 #### 一、现状：流程存在，但“判断”没有真正落地
 
@@ -859,7 +859,61 @@ raw（事件日志，事实）
 
 ---
 
-#### 五、解决方案（并入 15.5.1）
+#### 五、先拆成两个问题，不能混在一起
+
+当前讨论里其实混了两个层次的问题：
+
+**问题 A：业务流程设计（新内容进来后，经历正文和 Story 怎么更新）**
+
+- 输入：新 raw、已有正文、已有 Story；
+- 要决定：覆盖/补充/新事件/新 Story/旧 Story 更新/合并/拆分/删除；
+- 要保证：事实可追溯、顺序正确、Story 身份稳定、增量可对账；
+- 这属于**数据/状态维护**问题。
+
+关键词/检索方向：
+
+- incremental view maintenance / materialized view maintenance
+- event sourcing / CQRS / projection replay
+- change data capture / diff
+- entity resolution / identity resolution / stable identifiers
+- incremental knowledge graph construction / knowledge fusion
+- story segmentation / event segmentation / narrative event chains
+
+**问题 B：实现方式（用 Workflow、Agent 还是其他）**
+
+- 是一条固定流水线，还是让模型自己决定下一步？
+- 谁控制流程、谁有工具权限、出错时能否回滚/审计、成本是否可预测；
+- 这属于**控制流/架构**问题。
+
+关键词/检索方向：
+
+- workflow vs agent / agentic workflow
+- deterministic orchestration vs autonomous agent
+- bounded agent / tool allowlist / max steps
+- observability / trace / replay / unit economics
+- human-in-the-loop / earned autonomy
+
+**两者关系：**
+
+> A 决定“数据怎么变、Story 怎么保持身份”；B 决定“由谁来执行这些步骤”。  
+> **A 没设计好，换 Agent 只会把不确定性和 ID 漂移放大；B 没选对，固定 Workflow 也能做，只是长尾语义判断会差。**
+
+因此顺序应是：**先画清楚 A 的业务状态机，再决定 B 用 Workflow、Agent 还是混合。**
+
+**资料结论：**
+
+- 增量视图维护（Differential Dataflow / Shared Arrangements）说明：派生视图应按**记录级更新 + 多版本状态**维护，而不是整表重算；  
+  参考：[Shared Arrangements](https://ar5iv.labs.arxiv.org/html/1812.02639)
+- Event Sourcing / CQRS 说明：raw 是事件日志，narrative/Story 是 projection，需要**稳定 key、幂等、可回放**；  
+  参考：[Event Sourcing + CQRS](https://pkg.go.dev/github.com/quintans/eventsourcing@v0.32.0)
+- 增量知识图谱/实体融合说明：关键是**实体对齐、冲突合并、保留稳定 ID**，不是每次重抽全图；  
+  参考：[ID-GraphRAG](https://dl.acm.org/doi/10.1007/978-981-92-2856-0_11)、[LLM-assisted incremental KG fusion](https://www.sciencedirect.com/science/article/pii/S2667305326000499)
+- Workflow/Agent 选择：Anthropic 明确区分“预定代码路径的 workflow”和“模型自己决定下一步的 agent”，建议**先最简单、只在需要时增加复杂度**；决策框架则用四个问题判断：步骤能否预先枚举、错误影响范围、可观测性、单位成本。  
+  参考：[Anthropic: Building effective agents](https://www.anthropic.com/research/building-effective-agents)、[Workflow or Agent?](https://rexblack.com/resources/writing/workflow-or-agent)
+
+---
+
+#### 六、业务流程设计（增量维护）
 
 目标：保留 v6 的“无人工确认 + 正文权威”，同时把 Story 从“每次重写”改成“稳定实体 + 增量维护”。
 
@@ -968,7 +1022,7 @@ P1-Update 的 prompt 必须有：
 **一句话结论：**  
 当前问题不是“prompt 写得不够好”，而是 **把 Story 当成了每次生成的文本，而不是有稳定身份、可增量维护的投影**。解决方向是 **raw 事件日志 + narrative 投影 + story registry + 增量对账**，而不是继续优化“全量重写”的 prompt。
 
-### 15.5.2 这个任务适不适合 Agent？
+#### 七、实现方式：Workflow / Agent / 混合
 
 **短结论：适合做“受限的经历维护 Agent”，不适合放开自主管理整个经历库，也不能用它替代数据层的稳定身份设计。**
 
@@ -1053,7 +1107,7 @@ Experience Curator Agent（每个经历一个）
 | 2026-11-25 | `4d7ea93` | INPUT-FOLLOW 收敛为 v6 单一模型；重画流程图 | 文档不再保留旧确认模型 |
 | 2026-11-25 | `c8db9d5` | v6 图片改新文件名，避免同名旧图缓存 | 文档图与内容一致 |
 | 2026-11-25 | `67c779a` | 新增两次增量输入真实 smoke | 首次 4 Story / 第二次 5 Story；无重复段落 |
-| 本次 | §15–§18 | 追加输入/增量/派生细节、15.5 根因与增量方案、Agent 适配性、修改记录、核心指标、固定测试集 | 作为复测基线 |
+| 本次 | §15–§18 | 追加输入/增量/派生细节、15.5 两问题拆解（业务流程/实现方式）、Agent 适配性、修改记录、核心指标、固定测试集 | 作为复测基线 |
 
 ---
 
