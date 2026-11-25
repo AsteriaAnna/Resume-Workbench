@@ -418,8 +418,8 @@ time: 2025-10 ~ 2025-11 # 可选
 - 当前简历 bullets + 选中的 Story；
 - 全库 Story（含未选中的）；
 - A1 覆盖统计 + R4 matched/missing；
-- A3 候选缺口；
-- Critic issues。
+- A3 候选缺口（C 方案：有锚点才进候选）；
+- Critic issues（无锚点的 coverage issue 也在这里，供问题规划参考，不强行提问）。
 
 **输出**：
 
@@ -431,6 +431,7 @@ time: 2025-10 ~ 2025-11 # 可选
     "purpose": "add_content",
     "basis_type": "coverage_missing|adjacent_unselected|unrealized_potential",
     "action": "add_story|add_bullet",
+    "target_mode": "experience|story",
     "jd_quote": "逐字引用",
     "experience_id": "",
     "story_id": "",
@@ -560,7 +561,7 @@ time: 2025-10 ~ 2025-11 # 可选
 
 | basis_type | 依据 | 例子 | 目的 |
 | --- | --- | --- | --- |
-| `coverage_missing` | JD 引用在 A1 覆盖中为 `none`/弱，且库里有相关经历 | JD 要求 RAG 落地，但简历没体现 | **新增 Story/bullet** |
+| `coverage_missing` | JD 引用在 A1 覆盖中为 `none`/弱，**且库里存在相关经历锚点**（已选/未选 Story、经历级相关证据、或"提而未展"的 Story） | JD 要求 RAG 落地，但简历没体现；库里 A 经历有相关内容可补 | **新增 Story/bullet** |
 | `adjacent_unselected` | R4 发现库中 Story 有 `direct/adjacent` 证据，但没被选进简历 | A 经历里有 RAG 项目，但这次没选 | 新增一条内容 |
 | `unrealized_potential` | 已有 Story/经历有潜力，但当前没有机会生成 bullet（含"提而未展"、证据程度不够） | "A 里只提了一句用过 RAG，没展开" | 新增一条 Story/bullet；不要求改已选 bullet |
 
@@ -569,6 +570,11 @@ time: 2025-10 ~ 2025-11 # 可选
 - `unassigned_details` 非空是**流水线错误**，不是问题：必须阻断入库并修复。
 - 已生成 bullet 没有依据也是**流水线错误**，由 Critic/Revisor/告警处理，不作为用户问题。
 - `unrealized_potential` 必须先满足前置条件（候选 Story 存在、有价值、未被使用、能生成可靠 bullet），否则不提问。
+
+**C 方案（已定）：零覆盖分两种，不再强行造问题。**
+1. **有锚点**：JD 要求覆盖 none/弱，但库里有一段经历/Story 与它有真实关联（R4 的 direct/adjacent、R4 missing 的 reason、当前简历已使用但未展开、或经历级相关性）→ 允许提问，target 可以是 **experience（action=add_story）** 或 **story（action=add_bullet）**。
+2. **无锚点**：JD 要求覆盖 none/弱，且全库找不到任何相关经历/Story → **不生成问题**；只在 Critic 中输出 `coverage` issue，用户在评审里看到"该要求未覆盖"，自行决定是否新增经历。
+3. 无锚点不是被忽略：它必须出现在 `critic.issues`，不能被 A3/P10 静默吞掉。
 
 ### 10.3 生成流程
 
@@ -595,19 +601,22 @@ Question Store（状态 + evidence_rev）
 3. 动作过于笼统、无法支撑 bullet → 候选；
 4. `unassigned_details` 非空 → **直接报错阻断**，不进候选。
 
-**简历侧**
+**简历侧（C 方案）**
 
 1. 建 JD 覆盖快照：每条 JD 引用的 support = direct/adjacent/none；
-2. 对 `none/弱` 的 JD 引用，在**未选中的 Story/经历**里找 direct/adjacent 证据；
-3. 对已选 Story，检查是否存在“有潜力但没生成 bullet”的内容（动作+结果/交付存在，但未被选中/未展开）；
-4. 前置条件过滤（缺一不可）：
+2. 对 `none/弱` 的 JD 引用，先找**锚点**：
+   - 未选中的 direct/adjacent Story → 候选（`adjacent_unselected`）；
+   - 已选但未展开/证据不足的 Story → 候选（`unrealized_potential`）；
+   - 经历级相关证据（R4 的 missing/reason、经历中有同主题 Story）→ 候选（`coverage_missing`，target=experience，action=add_story）；
+   - **完全无锚点 → 不生成候选**，只记入 Critic 的 `coverage` issue；
+3. 前置条件过滤（缺一不可）：
    - 候选 Story/经历存在；
-   - 有动作 + 结果/交付/证据；
+   - 有动作 + 结果/交付/证据（experience 级锚点至少要有相关动作/原始材料）；
    - 当前简历未使用；
-   - 回答后能生成可靠的新 bullet；
-   - 答案能落到 Story 字段；
-5. 去重（target + basis_type + basis_quote），按覆盖影响排序；
-6. **全部输出候选**，交 P2/P10；不设上限，不做措辞，不编事实。
+   - 回答后能生成可靠的新 bullet/Story；
+   - 答案能落到 Story 字段或经历正文；
+4. 去重（target + basis_type + basis_quote），按覆盖影响排序；
+5. **全部输出候选**，交 P2/P10；不设上限，不做措辞，不编事实。
 
 ### 10.4 何时生成、多久更新、展示多少
 
@@ -712,7 +721,7 @@ Question Store（状态 + evidence_rev）
 11. 经历问题：basis 必须来自 Story/raw，不能凭空问；
 12. 简历问题：只能新增 Story/bullet，不能要求改写已选 bullet；
 13. 回答后旧问题 resolved/expired，同一依据不重复问；
-14. `unrealized_potential` 能识别\"只提了一句 RAG\"并生成新增问题；没有候选 Story 时不得提问。
+14. `unrealized_potential` 能识别\"只提了一句 RAG\"并生成新增问题；有锚点（经历/Story）才提问，无锚点只进 Critic issue；没有候选 Story 时不得编造提问。
 
 ### 11.3 验收
 
@@ -730,3 +739,99 @@ Question Store（状态 + evidence_rev）
 3. 版本管理用 Git（可选远端 GitHub），正文不写 revision/provenance，是否同意？
 4. bullet 字数：约 40，区间建议 35–55。
 5. R8 Revisor 1 轮还是 2 轮；R7 Critic 单次+人工复核是否够。
+
+---
+
+## 13. 问题二草案：经历正文 + 增量合并（待确认，不替代 §4/§5）
+
+> 背景：raw 是重要资产；每次增量输入应和已有经历比较，决定"补正文 / 新 Story / 旧 Story 补充"。
+> 新方向：经历库正文按时间/逻辑顺序写，不要求条目/结构；Story 从正文按规则抽取，完全交给 AI。
+> 本节是草案，**尚未替换 §4/§5 的 Story Markdown 权威模型**；需用户确认后再定稿。
+
+### 13.1 数据分层（草案）
+
+| 层 | 内容 | 谁写 | 权威 |
+| --- | --- | --- | --- |
+| raw | 每次输入的逐字原话 | 用户 | ✅ 事实来源，不可变 |
+| 经历正文 | 按时间/逻辑顺序组织的自然段；front matter 只放 type/name/role/time | AI 建议 + 人确认/编辑 | ✅ 经历内容权威 |
+| Story（派生） | 从正文按规则抽取的决策卡片：6 槽 + raw_quotes | AI 自动生成 | ❌ 派生缓存，可重建 |
+| Run / Question | 生成与提问产物 | 系统 | ❌ |
+
+关键变化：
+- 经历正文不再要求 `## Story` 结构；就是自然段，按顺序写；
+- Story 不再是人工维护的正文结构，而是**从正文派生**的生成/检索单元；
+- 正文改动后，派生 Story 重新生成；不再要用户逐张确认 Story 列表。
+
+### 13.2 增量输入流程（草案）
+
+```
+新 raw
+  → AI 对比：现有经历正文 + 已有派生 Story + 历史 raw
+  → 判断四类：
+      A. 已被现有正文覆盖（重复/同义）→ 不新增
+      B. 旧 Story 可补充（结果/口径/动作细节）→ 补正文对应段落
+      C. 新事件/新阶段 → 按时间/逻辑位置插入正文
+      D. 元信息/不确定/缺材料 → 放正文备注或问题，不伪造
+  → 输出 ExperiencePatch 提案（不是直接改写）
+  → 人确认/编辑/拒绝
+  → 写经历正文（版本 +1）
+  → 重算派生 Story（全量或受影响段落）
+  → 校验 raw_quotes / 自包含 / 父子层级
+  → 更新问题候选
+```
+
+### 13.3 ExperiencePatch 契约（草案）
+
+```json
+{
+  "base_rev": 12,
+  "operations": [{
+    "op": "append_after | insert_before | replace_span | merge_into",
+    "target_paragraph_id": "p_...",
+    "text": "要写入经历正文的段落（只能来自 raw 的组织，不得新增事实）",
+    "source_raw_ids": ["raw_..."],
+    "source_quotes": ["逐字原话"],
+    "reason": "为什么放这里/为什么补",
+    "affected_story_ids": ["story_..."]
+  }],
+  "unresolved": [{ "reason": "顺序不确定/指代不明", "question": "..." }]
+}
+```
+
+规则：
+1. AI 只能新增/重排/合并 raw 已表达的事实；不得新增数字、工具、结果；
+2. 位置由显式时间/顺序词决定；没有时间词且无法判断时，**不猜**，进 `unresolved` 提问；
+3. 同一段 raw 可产生多个 operation，但每个 operation 必须能追到 raw_quote；
+4. 人工编辑正文后，旧 Patch 基于旧 rev → 作废/重算，不自动合并。
+
+### 13.4 排序与"没有时间"的处理
+
+- 正文顺序 = 时间/逻辑顺序；没有明确时间时，默认按用户叙述顺序追加；
+- 新内容插入位置优先级：显式时间 > 显式顺序词（之前/之后/后来）> 用户确认 > 默认追加；
+- 不推断不存在的日期；不为了排序编造时间；
+- 用户可在正文中手动拖动/调整顺序；派生 Story 按正文顺序生成。
+
+### 13.5 派生 Story 的规则（草案）
+
+- 输入：经历正文 + 全量 raw；
+- 切分：一个 Story = 一个子目标/决策 + 动作 + 闭环结果；新问题/新阶段/独立决策处切；
+- 输出：6 槽 + `raw_quotes` + `source_paragraph_ids` + 父子关系（可选）；
+- Story 归属自动，不要求人确认；
+- 校验：`raw_quotes` 必须逐字存在于正文/raw；缺结果/缺动作的进 Fragment，不生成 bullet；
+- 正文改动 → 重新派生；旧 Story 不再稳定存在，生成阶段按新派生结果重跑。
+
+### 13.6 问题机制如何变化（草案）
+
+- **经历问题**：从"Story 缺什么"变成"正文缺什么/顺序不清/指代不明/口径缺失"；
+- **简历问题**：仍按 C 方案，有经历/正文锚点才问；
+- 回答 → 新 raw → 重新 Patch → 人确认 → 正文更新 → 派生 Story → 重算问题；
+- 问题状态仍用 `evidence_rev`（正文版本 + 派生版本）。
+
+### 13.7 主要风险 / 待确认
+
+1. **AI 直接改正文还是必须 Patch 确认？** 当前草案要求确认（防丢/防编）；若追求低摩擦，可改为"直接写 + 可撤销 + raw 引用"。
+2. **Story 不再人工确认**：抽取错误会直接影响生成；需要 Critic/A2 校验兜底，或保留"派生 Story 预览"用于审计。
+3. **顺序不确定**：默认追加可能造成时间线错误；是否允许用户拖动后重排？
+4. **已有 Story 结构的数据迁移**：现有 Markdown 是 Story 结构，如何转成自然段正文？
+5. **正文与 raw 的引用关系**：每个正文段落是否强制带 `source_raw_ids`？不强制则难以审计。
+6. **与 §4/§5 的关系**：本节定稿后，§4/§5 的 Story Markdown 权威模型需改为"正文权威 + Story 派生"。
