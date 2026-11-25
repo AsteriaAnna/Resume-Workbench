@@ -48,8 +48,8 @@ Story：title / slots（stage,module,problem,workflow,tech_link,outcome）/ owne
 
 # 规则
 1. 只能使用 Story 中的事实；不得新增数字、工具、结果、时间；
-2. Hook 4–12 字符，L2 行业标准术语（可 1–3 个英文短词），全篇同一水位；
-3. 正文 50–70 字；
+2. Hook 使用 L2 行业标准术语（可 1–3 个英文短词）；不限制字数；
+3. 正文不限制字数；
 4. CAR：先点具体卡点/约束 → 方案权衡（放弃 A 选 B）→ 落地解法 → 结果；focus_angle 写“为什么这么权衡”；
 5. PAR：业务前提 → 输入 → 核心处理节点 → 交付输出/效率变化；focus_angle 写“输入→处理→输出”的关键链路；
 6. 两种骨架的信息焦点必须不同，不能只换开头；
@@ -90,21 +90,26 @@ for (const s of stories) {
   const compile = await callJson(compileSystem, JSON.stringify({ story: s }, null, 2), `project-${s.story_id}`);
   const judge = await callJson(judgeSystem, JSON.stringify({ raw, story: s, car: compile.car, par: compile.par }, null, 2), `judge-${s.story_id}`);
   const checks = {
-    car_present: !!compile.car && charLen(compile.car.hook) >= 4 && charLen(compile.car.hook) <= 12 && charLen(compile.car.content) >= 50 && charLen(compile.car.content) <= 70,
-    par_present: !!compile.par && charLen(compile.par.hook) >= 4 && charLen(compile.par.hook) <= 12 && charLen(compile.par.content) >= 50 && charLen(compile.par.content) <= 70,
+    car_present: !!compile.car && charLen(compile.car.content) > 0,
+    par_present: !!compile.par && charLen(compile.par.content) > 0,
     evidence: !!compile.car && !!compile.par && evidenceOk(compile.car.evidence_quote, s) && evidenceOk(compile.par.evidence_quote, s),
     numbers: !!compile.car && !!compile.par && numberOk(compile.car.content, s) && numberOk(compile.par.content, s),
   };
-  const multi = checks.car_present && checks.par_present && checks.evidence && checks.numbers && judge.car_l2 && judge.par_l2 && judge.focus_distinct && judge.faithfulness;
+  const bulletChecks = [compile.car, compile.par].filter(Boolean);
+  const evidenceAny = bulletChecks.length > 0 && bulletChecks.every((b) => evidenceOk(b.evidence_quote, s));
+  const numbersAny = bulletChecks.length > 0 && bulletChecks.every((b) => numberOk(b.content, s));
+  const multi = checks.car_present && checks.par_present && checks.evidence && checks.numbers && judge.focus_distinct;
+  const hook_l2 = !!judge.car_l2 && !!judge.par_l2;
   const purity = !!judge.single_topic && !judge.split_recommended;
-  const faithful = checks.evidence && checks.numbers && !!judge.faithfulness;
-  rows.push({ story: s, compile, judge, checks, multi, purity, faithful });
+  const faithful = evidenceAny && numbersAny && !!judge.faithfulness;
+  rows.push({ story: s, compile, judge, checks, multi, purity, faithful, hook_l2, evidenceAny, numbersAny });
 }
 
 const summary = {
   scheme: schemeName,
   stories: rows.length,
   multi_skeleton_pass: rows.filter((r) => r.multi).length,
+  hook_l2_pass: rows.filter((r) => r.hook_l2).length,
   purity_pass: rows.filter((r) => r.purity).length,
   faithfulness_pass: rows.filter((r) => r.faithful).length,
   rows,
@@ -113,11 +118,11 @@ const outDir = path.join(REPORT_DIR, `story-projection-${new Date().toISOString(
 await fs.mkdir(outDir, { recursive: true });
 await fs.writeFile(path.join(outDir, 'result.json'), JSON.stringify(summary, null, 2), 'utf8');
 
-const lines = ['# Story 三指标验收：多骨架 / 纯度 / 忠实度', '', `方案：${schemeName}，Story 数：${rows.length}`, '', '| Story | 多骨架 | 纯度 | 忠实度 | CAR Hook | PAR Hook | 问题 |', '| --- | --- | --- | --- | --- | --- | --- |'];
+const lines = ['# Story 三指标验收：多骨架 / 纯度 / 忠实度', '', `方案：${schemeName}，Story 数：${rows.length}`, '', '| Story | 多骨架（不限字数） | L2 Hook（单独） | 纯度 | 忠实度 | CAR Hook | PAR Hook | 问题 |', '| --- | --- | --- | --- | --- | --- | --- | --- |'];
 for (const r of rows) {
-  lines.push(`| ${r.story.title} | ${r.multi ? '✅' : '❌'} | ${r.purity ? '✅' : '❌'} | ${r.faithful ? '✅' : '❌'} | ${r.compile.car?.hook || '-'} | ${r.compile.par?.hook || '-'} | ${(r.judge.problems || []).join('；') || '-'} |`);
+  lines.push(`| ${r.story.title} | ${r.multi ? '✅' : '❌'} | ${r.hook_l2 ? '✅' : '❌'} | ${r.purity ? '✅' : '❌'} | ${r.faithful ? '✅' : '❌'} | ${r.compile.car?.hook || '-'} | ${r.compile.par?.hook || '-'} | ${(r.judge.problems || []).join('；') || '-'} |`);
 }
-lines.push('', `**汇总：多骨架通过 ${summary.multi_skeleton_pass}/${summary.stories}；纯度 ${summary.purity_pass}/${summary.stories}；忠实度 ${summary.faithfulness_pass}/${summary.stories}**`);
+lines.push('', `**汇总：多骨架通过 ${summary.multi_skeleton_pass}/${summary.stories}；L2 Hook ${summary.hook_l2_pass}/${summary.stories}；纯度 ${summary.purity_pass}/${summary.stories}；忠实度 ${summary.faithfulness_pass}/${summary.stories}**`);
 lines.push('', '## 详细输出', '');
 for (const r of rows) {
   lines.push(`### ${r.story.title}`, '');
