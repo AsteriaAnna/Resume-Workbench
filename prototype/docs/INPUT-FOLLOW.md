@@ -598,3 +598,292 @@ R5（Planner）在扫描 JD 时一次性锁定：
 | 事实 | 数字/工具/结果必须来自 Story；不得跨 Story 拼造 |
 | 技术栈 | 可选；每项 ≤40 字；只写技术与用途 |
 | 输出 | 每条 bullet 带 `story_id`、`jd_quote`、`evidence_quote` |
+
+---
+
+# 15. 输入 → 增量输入 → 派生 Story（实现细节）
+
+> 本节是 §4/§8 的详细展开，给实现、调试和复测用；不改变前面契约。
+
+## 15.1 第一层：raw
+
+- 每次用户输入都单独存一份 raw：`raw/<raw_id>.json`；
+- raw 只追加，不修改；
+- 字段：`{ raw_id, experience_id, text, at }`；
+- 所有后续 Patch/Story/引用都必须能回溯到 raw 的逐字 quote。
+
+## 15.2 第二层：经历正文 narrative.md
+
+### 首次输入
+
+```
+appendRaw
+→ P11（正文为空）
+→ operations（按时间/逻辑拆成自然段）
+→ 自动应用到 narrative.md
+→ P1 从正文派生 Story
+→ content.md（派生缓存）
+```
+
+约束：
+
+- 首次输入时，P11 不能因为“历史 raw 里有相同内容”而拒绝；正文为空 = 初始录入；
+- 正文可以有标题、时间、身份等元信息，但不得把同一句角色重复写两遍；
+- 元信息放 front matter 或首段一次即可；不要在正文里重复“担任副主席/实习生”等。
+
+### 增量输入
+
+```
+appendRaw（新 raw）
+→ P11 输入：当前正文 + 新 raw + 历史 raw（排除本次）
+→ 判断四类：
+    A. 已覆盖 → 不新增
+    B. 旧正文可补充 → merge_into / replace_span
+    C. 新事件/新阶段 → insert_before / append_after
+    D. 顺序/指代不确定 → unresolved 提问
+→ 自动应用（不人工确认）
+→ 重新派生 Story（全量）
+```
+
+硬规则：
+1. `source_quotes` 必须逐字来自**本次** raw；不满足的 operation 丢弃并记 `skipped`；
+2. 位置只依据显式时间/顺序词；判断不了进 `unresolved`；
+3. 同一事实不重复写；同一段 raw 不产生两个同义段落；
+4. 新增内容按时间/逻辑放；没有时间默认追加；
+5. 不新增数字、工具、结果、时间；只重组 raw 已有事实。
+
+### 当前实现的实际观察（2026-11-25）
+
+测试经历：`exp_74645d5065a74df4`（学业发展中心），raw 327 字。
+
+| 输入 | 字数 | P11 applied | unresolved | 正文段数 | 重复段落 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 第一次（标题+时间+第一段） | 204 | 1 | 0 | 3 | 0 |
+| 第二次（6场/12天/AI工具） | 121 | 1 | 0 | 4 | 0 |
+
+结论：**增量合并成功，无重复段落、无事实丢失、无未决**；但首次正文出现“担任副主席”重复两次，需要 P11 去重。
+
+## 15.3 第三层：派生 Story
+
+### 输入/输出
+
+- 输入：`narrative.md` 全文；
+- 输出：`stories[]` + `fragments[]` + `unassigned_details[]`；
+- 自动写入 `content.md` 缓存；**不人工确认**。
+
+Story 字段：
+
+```json
+{
+  "story_id": "story_...",
+  "parent_story_id": null,
+  "order": 1,
+  "title": "≤30 字",
+  "summary": "",
+  "ownership": "",
+  "scope": "",
+  "slots": {
+    "stage": "", "module": "", "problem": "",
+    "workflow": "", "tech_link": "", "outcome": ""
+  },
+  "raw_quotes": ["逐字原话"],
+  "flags": []
+}
+```
+
+### 切分规则
+
+一个 Story = **一个子目标/决策 + 本人动作 + 闭环结果/交付 + 自包含**。
+
+必须拆：
+- 新的子问题/卡点；
+- 新阶段/里程碑；
+- 独立技术/产品决策；
+- 同一大功能下，解决的问题/手段不同（如“语音转文字”vs“时间解析”）。
+
+必须合：
+- 同一决策的补充原因、参数微调；
+- 同一结果的多个连续动作；
+- 同一职责的重复描述。
+
+不设固定张数；一段核心经历通常 3–8 张；不足就少，不硬凑。
+
+### 准入/降级
+
+- 满足“子目标+动作+结果/交付+自包含+原话” → Story；
+- 缺结果/缺动作/只是背景/只是职责列表 → Fragment；
+- 角色/荣誉/挂名但无本人动作 → Fragment 或弱 Story（必须标 flags）；
+- `problem`/`tech_link` 可以“未提及”，不因此拒绝，但会降低 CAR/技术链路适配度。
+
+### 父子层级
+
+- 默认平铺；
+- 仅当总目标跨多个独立子目标时使用父/子；最大深度 2；
+- 父只做背景/总述，不生成 bullet、不作证据；
+- 子 quote 必须落在父覆盖范围；同一 quote 只挂一个叶子。
+
+### 质量 flags（派生时）
+
+允许的 flags：
+`missing_problem`、`missing_outcome`、`missing_metric`、`vague_action`、`possible_duplicate`、`weak_ownership`、`task_list_not_story`。
+
+要求：**缺什么就标什么**；不能只标 `missing_outcome`，却缺 `problem/tech_link` 不标。
+
+## 15.4 真实输出的质量问题（当前基线）
+
+### 做得好的
+
+- 增量正文没有重复、没有丢事实；
+- raw_quotes 全部可回查（第一次 4/4，第二次 6/6）；
+- 新事实（6 场、12 天、AI 工具）都正确进入正文和 Story；
+- 输出 JSON 结构稳定，可落盘。
+
+### 还不够好的
+
+1. **正文首段角色重复**：  
+   “担任副主席”在同一段出现两次。
+2. **Story 粒度不稳定**：  
+   第一次 4 条，第二次 5 条；第一次的“公众号/报名/对接”三条，第二次被合并成“日常运营与内容制作”一条。  
+   原因：每次正文变化后全量重新派生，没有稳定合并策略。
+3. **过度合并**：  
+   “日常运营与内容制作”包含内容、流程、数据、沟通四类动作，更像职责列表，不像一个决策/结果链，写 bullet 时难以单点聚焦。
+4. **角色/起点被当 Story**：  
+   “主动联系老师任副主席”没有明确卡点和可验证结果，准入偏弱。
+5. **问题槽位缺失但 flags 不完整**：  
+   5 条 Story 中 4 条缺 problem、3 条缺 tech_link；只有“AI 工具”一条标了 missing_outcome。
+6. **缺少“卡点/权衡”**：  
+   raw 本身是任务叙述，P1 只能填 problem=未提及；后续 CAR 句式会缺素材，需要问题引擎补问。
+
+---
+
+# 16. 修改记录
+
+| 日期 | 版本/提交 | 改动 | 结果 |
+| --- | --- | --- | --- |
+| 2026-11-24 | `f19229f` | 按 INPUT-FOLLOW 从 0 实现 v5 核心链路 | 16/16 测试通过 |
+| 2026-11-25 | `75f76bd` | 修复二次确认 Fragment 合并时 `norm` 未导入崩溃 | 加回归测试 |
+| 2026-11-25 | `b41ce37` | v6：经历正文自动 merge、无人工确认、Story 自动派生；接入三区/Hook/句式方法论 | 17/17 测试；3 段真实 smoke 生成 10 bullets |
+| 2026-11-25 | `4d7ea93` | INPUT-FOLLOW 收敛为 v6 单一模型；重画流程图 | 文档不再保留旧确认模型 |
+| 2026-11-25 | `c8db9d5` | v6 图片改新文件名，避免同名旧图缓存 | 文档图与内容一致 |
+| 2026-11-25 | `67c779a` | 新增两次增量输入真实 smoke | 首次 4 Story / 第二次 5 Story；无重复段落 |
+| 本次 | §15–§18 | 追加输入/增量/派生细节、修改记录、核心指标、固定测试集 | 作为复测基线 |
+
+---
+
+# 17. 核心指标（复测必须验证）
+
+## 17.1 输入/Patch
+
+| 指标 | 定义 | 目标 |
+| --- | --- | --- |
+| `patch_applied` | 每次 ingest 成功应用的 operation 数 | 首次 >0；增量 >0 |
+| `patch_skipped` | 因 quote 不匹配/空文本丢弃的 operation 数 | 0 |
+| `patch_unresolved` | 顺序/指代不确定的问题数 | 0；若有必须展示 |
+| `narrative_duplicate_paragraphs` | 正文重复段落数 | 0 |
+| `narrative_role_duplication` | 角色/身份在同一段重复次数 | 0 |
+| `raw_fact_retention` | raw 关键事实是否进入正文（人工抽查） | 100% |
+
+## 17.2 Story
+
+| 指标 | 定义 | 目标 |
+| --- | --- | --- |
+| `story_count` | 每段经历派生 Story 数 | 3–8；不足不硬凑 |
+| `quote_pass_rate` | Story raw_quotes 在正文/raw 中逐字命中率 | 100% |
+| `slot_fill_rate` | 6 槽非空/非“未提及”比例 | ≥0.75 |
+| `story_admission_rate` | 满足“决策/动作/结果/自包含”的 Story 比例（人工抽样） | ≥0.8 |
+| `over_merge_count` | 包含 ≥3 类独立动作的 Story 数（人工） | 0 |
+| `story_stability` | 两次派生 Story 标题/quote 的 Jaccard | 当前偏低；目标 ≥0.6 |
+| `flag_completeness` | 缺槽位是否都有对应 flags | 100% |
+| `task_list_story_rate` | 纯职责列表被当 Story 的比例 | 0 |
+
+## 17.3 下游可用性
+
+| 指标 | 定义 | 目标 |
+| --- | --- | --- |
+| `evidence_quote_pass_rate` | 生成 bullet 的 evidence_quote 可回查率 | 100% |
+| `content_length_compliance` | 50–70 字比例 | ≥90% |
+| `hook_length_compliance` | 4–12 字符比例 | 100% |
+| `structure_errors` | 背景/条数/父 Story/重复等 A2 错误 | 0 |
+| `question_coverage` | 有锚点缺口是否产出问题 | 有锚点 → 有问题；无锚点 → Critic issue |
+
+## 17.4 当前基线（复测对比用）
+
+| 指标 | 第一次 | 第二次 |
+| --- | ---: | ---: |
+| Story 数 | 4 | 5 |
+| 槽位填充率 | 0.833 | 0.733 |
+| quote 命中 | 4/4 | 6/6 |
+| 重复段落 | 0 | 0 |
+| patch applied/skipped/unresolved | 1/0/0 | 1/0/0 |
+| 正文段数 | 3 | 4 |
+
+注意：当前基线**不是目标值**；它是“改动前对照”，尤其 Story 稳定性/过度合并明显未达标。
+
+---
+
+# 18. 固定测试集（复测必须用同一套）
+
+## 18.1 经历库
+
+来源：`沙盒数据-真实语料-v3/v2/cards.json`（真实数据，不提交到公开仓库）。
+
+7 段经历：
+
+| exp_id | 类型 | 标题 | raw 字数 |
+| --- | --- | --- | ---: |
+| `exp_74645d5065a74df4` | campus | 学业发展中心活动组织与运营 | 327 |
+| `exp_d50a9529b632446a` | campus | 扣子平台校园推广 | 708 |
+| `exp_5a658e3efb144562` | internship | 成都梦想科技产品部门实习 | 513 |
+| `exp_b7c1b5a21acf49d8` | internship | 索尼中国 HRG 部门实习 | 835 |
+| `exp_642a44a57bf84af7` | campus | 抖音校园 WowLand 推广 | 164 |
+| `exp_5d4fb766dd414965` | campus | 校内 AI 创新部门负责人 | 94 |
+| `exp_87e94b1c84884de3` | other | 其他实践与校园身份 | 112 |
+
+## 18.2 两份 JD
+
+| JD | 方向 | 用途 |
+| --- | --- | --- |
+| `回归集/jd-01-市场部实习生.md` | 内容运营 + 数据 | 校园经历/内容运营选材 |
+| `回归集/jd-02-AI产品实习生.md` | AI 产品/文档 | 跨经历合并、文档/结构化能力 |
+
+固定模型：`deepseek-flash`，`temperature` 按各 P 提示词；换模型必须单独记录。
+
+## 18.3 两次增量输入固定样本
+
+用 `exp_74645d5065a74df4` 的 raw，按空行切分：
+
+- 第一次：chunks `0..2`（标题/时间/第一段，204 字）；
+- 第二次：chunk `3`（6场/12天/AI工具，121 字）；
+- 不允许第二次包含第一次内容（否则不是增量测试）。
+
+脚本：`prototype/eval/two-input-smoke.mjs`。
+
+## 18.4 复测命令
+
+```bash
+cd repo
+npm test
+node prototype/eval/two-input-smoke.mjs
+node prototype/eval/v6-real-smoke.mjs
+```
+
+- `two-input-smoke`：验证增量正文 + Story 派生 + 质量指标；
+- `v6-real-smoke`：3 段真实经历自动 ingest + 生成，检查三区/问题/长度；
+- 报告在 `prototype/eval/reports/`，不提交公开仓库。
+
+## 18.5 复测判定
+
+必须同时满足：
+
+1. `patch_skipped=0`；`narrative_duplicate_paragraphs=0`；
+2. `quote_pass_rate=100%`；`slot_fill_rate ≥ 0.75`；
+3. `structure_errors=0`；`content_length_compliance ≥ 90%`；
+4. 有锚点缺口能出问题，无锚点只进 Critic；
+5. Story 稳定性不低于本次基线，且过度合并不增加；
+6. 人工抽样 5 条 Story：至少 4 条满足“决策/动作/结果/自包含”。
+
+## 18.6 基线记录的局限
+
+- 样本小（1 段两次增量 + 3 段生成），不能当统计显著性结论；
+- Story 质量指标中 `story_admission_rate`/`over_merge`/`stability` 需人工抽样；
+- 真实 API 输出有随机性，复测需固定模型、温度、提示词版本，并记录 run id。
