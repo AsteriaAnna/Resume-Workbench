@@ -760,7 +760,7 @@ Story 字段：
 
 > 本节回答：当前“输入 → 增量 → 派生 Story”为什么会出现结构漂移；这不是单个 prompt 措辞问题，而是**数据模型 + 派生机制**的问题。
 
-### 15.5.1 现状、根因与资料结论
+### 15.5.1 现状、根因、资料结论与解决方案
 
 #### 一、现状：流程存在，但“判断”没有真正落地
 
@@ -859,7 +859,7 @@ raw（事件日志，事实）
 
 ---
 
-### 15.5.2 解决方案
+#### 五、解决方案（并入 15.5.1）
 
 目标：保留 v6 的“无人工确认 + 正文权威”，同时把 Story 从“每次重写”改成“稳定实体 + 增量维护”。
 
@@ -968,6 +968,81 @@ P1-Update 的 prompt 必须有：
 **一句话结论：**  
 当前问题不是“prompt 写得不够好”，而是 **把 Story 当成了每次生成的文本，而不是有稳定身份、可增量维护的投影**。解决方向是 **raw 事件日志 + narrative 投影 + story registry + 增量对账**，而不是继续优化“全量重写”的 prompt。
 
+### 15.5.2 这个任务适不适合 Agent？
+
+**短结论：适合做“受限的经历维护 Agent”，不适合放开自主管理整个经历库，也不能用它替代数据层的稳定身份设计。**
+
+#### 为什么看起来适合 Agent
+
+输入 → 维护经历/Story 这件事确实是：
+
+- 有状态：要读已存在的正文、Story registry、raw 历史；
+- 多步：判断新内容是否覆盖、插入、合并、拆分；
+- 语义模糊：故事的角度、方向、边界没有唯一答案；
+- 需要工具：读文件、diff、匹配已有 Story、写 Patch、校验、提问；
+- 需要循环：一次判断不够，要“看→改→验”。
+
+这些正是 Agent（工具循环 + 状态）擅长的地方。
+
+#### 为什么不能直接交给自主 Agent
+
+1. **根因不是“谁来想”，是“有没有稳定身份和增量维护”**：  
+   换成一个自主 Agent 全量重写 Story，ID 漂移、结构抖动只会更严重。
+2. **无人工确认 + 自主写库 = 风险叠加**：  
+   没有人工兜底时，Agent 的误合并/误删必须有确定性校验拦住，不能靠“再让 Agent 想想”。
+3. **不可审计**：  
+   多步自主决策难以复现，出问题不知道是哪一步改了 Story。
+4. **成本/延迟**：  
+   每次输入都跑一个开放循环，比固定 P11/P1 更贵。
+
+#### 推荐架构：确定性底座 + 一个受限 Curator Agent
+
+```
+raw / narrative / story_registry      （确定性数据层）
+        ↑ 只读工具 / 受控写入工具
+Experience Curator Agent（每个经历一个）
+  tools:
+    - read_narrative
+    - diff_changed_paragraphs
+    - match_existing_story
+    - propose_patch
+    - derive_story_update
+    - validate_patch
+    - ask_question
+  max_steps: 3~5
+  output: patch + story operations + questions
+        ↓
+确定性 Validator（quote/ID/无孤儿/无重复）
+        ↓
+应用 Patch / 更新 registry
+```
+
+原则：
+
+- Agent **只能调工具**，不能直接任意改写 Markdown/Registry；
+- Agent 的每一步输出都要过 Validator；
+- Agent 负责“语义判断”（合并/拆分/角度/提问），确定层负责“身份/引用/幂等/审计”；
+- 不做多 Agent 辩论；最多两个独立提案 + 确定性对账，避免标准漂移。
+
+#### 和现有 Workflow 的关系
+
+| 环节 | 建议 |
+| --- | --- |
+| P11 正文 Patch | 保留确定性 prompt；Agent 可决定何时调用 |
+| P1-Update Story | 改为带 registry/diff 的受控工具；Agent 可决定 create/update/merge/split |
+| A3/P2/P10 问题 | 保留算法 + prompt；Agent 可决定是否追问 |
+| 全量 rebuild | 只作为修复模式，Agent 不默认调用 |
+
+**结论：不是“用 Agent 替换 Workflow”，而是“Workflow 做确定性维护，Agent 做局部语义决策”。**
+
+#### 分版本落地（一次只优化一个点）
+
+1. **v6.1（先做，不引入 Agent）**：story registry + 稳定 story_key + P1-Update；解决全量重写/ID 漂移。  
+2. **v6.2（再引入 Agent）**：Experience Curator Agent 只做“合并/拆分/角度/追问”的受限循环，工具复用 P11/P1/A3。  
+3. **v6.3（对比）**：同一测试集跑 Workflow vs Curator Agent，比较 story_stability、over_merge、quote_pass、成本；只有指标不退化才保留 Agent。
+
+---
+
 # 16. 修改记录
 
 | 日期 | 版本/提交 | 改动 | 结果 |
@@ -978,7 +1053,7 @@ P1-Update 的 prompt 必须有：
 | 2026-11-25 | `4d7ea93` | INPUT-FOLLOW 收敛为 v6 单一模型；重画流程图 | 文档不再保留旧确认模型 |
 | 2026-11-25 | `c8db9d5` | v6 图片改新文件名，避免同名旧图缓存 | 文档图与内容一致 |
 | 2026-11-25 | `67c779a` | 新增两次增量输入真实 smoke | 首次 4 Story / 第二次 5 Story；无重复段落 |
-| 本次 | §15–§18 | 追加输入/增量/派生细节、15.5 根因与增量方案、修改记录、核心指标、固定测试集 | 作为复测基线 |
+| 本次 | §15–§18 | 追加输入/增量/派生细节、15.5 根因与增量方案、Agent 适配性、修改记录、核心指标、固定测试集 | 作为复测基线 |
 
 ---
 
